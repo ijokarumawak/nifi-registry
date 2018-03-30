@@ -16,7 +16,6 @@
  */
 package org.apache.nifi.registry.provider.flow.git;
 
-import org.apache.nifi.registry.provider.flow.git.GitFlowMetaData;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.lib.ObjectId;
@@ -105,21 +104,9 @@ public class TestGitFlowPersistenceProvider {
     }
 
     @Test
-    public void testLoad() throws IOException {
-        final Repository gitRepo = new FileRepositoryBuilder()
-                .readEnvironment()
-                .findGitDir(new File("/Users/koji/dev/nifi-registry-data-test"))
-                .build();
-
+    public void testLoadGitRepository() throws IOException, GitAPIException {
         final GitFlowMetaData metaData = new GitFlowMetaData();
-        metaData.load("/Users/koji/dev/nifi-registry-data-test");
-
-    }
-
-    @Test
-    public void testLoadFromGit() throws IOException, GitAPIException {
-        final GitFlowMetaData metaData = new GitFlowMetaData();
-        metaData.loadFromGit("/Users/koji/dev/nifi-registry-data-test");
+        metaData.loadGitRepository(new File("/Users/koji/dev/nifi-registry-data-test"));
     }
 
 }

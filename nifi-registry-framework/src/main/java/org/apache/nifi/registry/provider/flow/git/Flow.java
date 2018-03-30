@@ -18,8 +18,9 @@ package org.apache.nifi.registry.provider.flow.git;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
-public class Flow {
+class Flow {
     /**
      * The ID of a Flow. It never changes.
      */
@@ -38,17 +39,24 @@ public class Flow {
         return versions.containsKey(version);
     }
 
+    public FlowPointer getFlowVersion(int version) {
+        return versions.get(version);
+    }
+
     public void putVersion(int version, FlowPointer pointer) {
         versions.put(version, pointer);
     }
 
     public static class FlowPointer {
-        private final String gitRev;
+        private String gitRev;
         private final String fileName;
 
-        public FlowPointer(String gitRev, String fileName) {
-            this.gitRev = gitRev;
+        public FlowPointer(String fileName) {
             this.fileName = fileName;
+        }
+
+        public void setGitRev(String gitRev) {
+            this.gitRev = gitRev;
         }
 
         public String getGitRev() {
@@ -58,6 +66,23 @@ public class Flow {
         public String getFileName() {
             return fileName;
         }
+    }
+
+    /**
+     * Serialize the latest version of this Flow meta data.
+     * @return serialized flow
+     */
+    Map<String, Object> serialize() {
+        final Map<String, Object> map = new HashMap<>();
+        final Optional<Integer> latestVerOpt = versions.keySet().stream().reduce(Integer::max);
+        if (!latestVerOpt.isPresent()) {
+            throw new IllegalStateException("No version is registered.");
+        }
+        final Integer latestVer = latestVerOpt.get();
+        map.put(GitFlowMetaData.VER, latestVer);
+        map.put(GitFlowMetaData.FILE, versions.get(latestVer).fileName);
+
+        return map;
     }
 
 }

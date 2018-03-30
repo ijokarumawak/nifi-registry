@@ -18,8 +18,10 @@ package org.apache.nifi.registry.provider.flow.git;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Collectors;
 
-public class Bucket {
+class Bucket {
     private final String bucketId;
     private String bucketName;
 
@@ -48,4 +50,22 @@ public class Bucket {
         return this.flows.computeIfAbsent(flowId, k -> new Flow(flowId));
     }
 
+    public Optional<Flow> getFlow(String flowId) {
+        return Optional.ofNullable(flows.get(flowId));
+    }
+
+    /**
+     * Serialize the latest version of this Bucket meta data.
+     * @return serialized bucket
+     */
+    Map<String, Object> serialize() {
+        final Map<String, Object> map = new HashMap<>();
+
+        map.put(GitFlowMetaData.LAYOUT_VERSION, GitFlowMetaData.CURRENT_LAYOUT_VERSION);
+        map.put(GitFlowMetaData.BUCKET_ID, bucketId);
+        map.put(GitFlowMetaData.FLOWS,
+                flows.keySet().stream().collect(Collectors.toMap(k -> k, k -> flows.get(k).serialize())));
+
+        return map;
+    }
 }
