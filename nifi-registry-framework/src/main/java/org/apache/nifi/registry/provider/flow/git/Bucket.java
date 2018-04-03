@@ -54,6 +54,14 @@ class Bucket {
         return Optional.ofNullable(flows.get(flowId));
     }
 
+    public void removeFlow(String flowId) {
+        flows.remove(flowId);
+    }
+
+    public boolean isEmpty() {
+        return flows.isEmpty();
+    }
+
     /**
      * Serialize the latest version of this Bucket meta data.
      * @return serialized bucket

@@ -83,15 +83,19 @@ class Flow {
      */
     Map<String, Object> serialize() {
         final Map<String, Object> map = new HashMap<>();
-        final Optional<Integer> latestVerOpt = versions.keySet().stream().reduce(Integer::max);
-        if (!latestVerOpt.isPresent()) {
-            throw new IllegalStateException("No version is registered.");
-        }
-        final Integer latestVer = latestVerOpt.get();
+        final Integer latestVer = getLatestVersion();
         map.put(GitFlowMetaData.VER, latestVer);
         map.put(GitFlowMetaData.FILE, versions.get(latestVer).fileName);
 
         return map;
+    }
+
+    Integer getLatestVersion() {
+        final Optional<Integer> latestVerOpt = versions.keySet().stream().reduce(Integer::max);
+        if (!latestVerOpt.isPresent()) {
+            throw new IllegalStateException("No version is registered.");
+        }
+        return latestVerOpt.get();
     }
 
 }

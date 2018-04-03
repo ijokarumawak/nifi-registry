@@ -62,6 +62,8 @@ class GitFlowMetaData {
     private Map<String, Bucket> buckets = new HashMap<>();
 
     private Repository openRepository(final File gitProjectRootDir) throws IOException {
+        // TODO: What if the directory doesn't exist?
+        // TODO: What if the directory is not a Git repo?
         return new FileRepositoryBuilder()
                 .readEnvironment()
                 .findGitDir(gitProjectRootDir)
@@ -74,6 +76,7 @@ class GitFlowMetaData {
         gitRepo = openRepository(gitProjectRootDir);
 
         try (final Git git = new Git(gitRepo)) {
+            boolean isLatestCommit = true;
             for (RevCommit commit : git.log().call()) {
                 final String shortCommitId = commit.getId().abbreviate(7).name();
                 logger.debug("Processing a commit: {}", shortCommitId);
@@ -93,26 +96,27 @@ class GitFlowMetaData {
                             // TODO: what is this nth?? When does it get grater than 0? Tree count seems to be always 1..
                             if (pathString.endsWith("/" + BUCKET_FILENAME)) {
                                 bucketObjectIds.put(pathString, treeWalk.getObjectId(0));
-                            } else {
-                                // TODO: filter by extension, e.g. snapshot?
+                            } else if (pathString.endsWith(GitFlowPersistenceProvider.SNAPSHOT_EXTENSION)) {
                                 flowSnapshotObjectIds.put(pathString, treeWalk.getObjectId(0));
                             }
                         }
                     }
 
                     if (bucketObjectIds.isEmpty()) {
-                        logger.debug("Tree at commit {} does not contain any " + BUCKET_FILENAME + ". Skipping it.", shortCommitId);
-                        continue;
+                        // No bucket.yml means at this point, all flows are deleted. No need to scan older commits because those are already deleted.
+                        logger.debug("Tree at commit {} does not contain any " + BUCKET_FILENAME + ". Stop loading commits here.", shortCommitId);
+                        return;
                     }
 
-                    loadBuckets(gitRepo, commit, bucketObjectIds, flowSnapshotObjectIds);
+                    loadBuckets(gitRepo, commit, isLatestCommit, bucketObjectIds, flowSnapshotObjectIds);
+                    isLatestCommit = false;
                 }
             }
         }
     }
 
     @SuppressWarnings("unchecked")
-    private void loadBuckets(Repository gitRepo, RevCommit commit, Map<String, ObjectId> bucketObjectIds, Map<String, ObjectId> flowSnapshotObjectIds) throws IOException {
+    private void loadBuckets(Repository gitRepo, RevCommit commit, boolean isLatestCommit, Map<String, ObjectId> bucketObjectIds, Map<String, ObjectId> flowSnapshotObjectIds) throws IOException {
         final Yaml yaml = new Yaml();
         for (String bucketFilePath : bucketObjectIds.keySet()) {
             final ObjectId bucketObjectId = bucketObjectIds.get(bucketFilePath);
@@ -133,7 +137,21 @@ class GitFlowMetaData {
             }
 
             final String bucketId = (String) bucketMeta.get(BUCKET_ID);
-            final Bucket bucket = getBucketOrCreate(bucketId);
+
+            final Bucket bucket;
+            if (isLatestCommit) {
+                // If this is the latest commit, then create one.
+                bucket = getBucketOrCreate(bucketId);
+            } else {
+                // Otherwise non-existing bucket means it's already deleted.
+                final Optional<Bucket> bucketOpt = getBucket(bucketId);
+                if (bucketOpt.isPresent()) {
+                    bucket = bucketOpt.get();
+                } else {
+                    logger.debug("Bucket {} does not exist any longer. It may have been deleted.", bucketId);
+                    continue;
+                }
+            }
 
             // E.g. DirA/DirB/DirC/bucket.yml -> DirC will be the bucket name.
             final String[] pathNames = bucketFilePath.split("/");
@@ -145,12 +163,12 @@ class GitFlowMetaData {
             }
 
             final Map<String, Object> flows = (Map<String, Object>) bucketMeta.get(FLOWS);
-            loadFlows(commit, bucket, bucketFilePath, flows, flowSnapshotObjectIds);
+            loadFlows(commit, isLatestCommit, bucket, bucketFilePath, flows, flowSnapshotObjectIds);
         }
     }
 
     @SuppressWarnings("unchecked")
-    private void loadFlows(RevCommit commit, Bucket bucket, String backetFilePath, Map<String, Object> flows, Map<String, ObjectId> flowSnapshotObjectIds) {
+    private void loadFlows(RevCommit commit, boolean isLatestCommit, Bucket bucket, String backetFilePath, Map<String, Object> flows, Map<String, ObjectId> flowSnapshotObjectIds) {
         for (String flowId : flows.keySet()) {
             final Map<String, Object> flowMeta = (Map<String, Object>) flows.get(flowId);
 
@@ -158,7 +176,21 @@ class GitFlowMetaData {
                 continue;
             }
 
-            final Flow flow = bucket.getFlowOrCreate(flowId);
+            final Flow flow;
+            if (isLatestCommit) {
+                // If this is the latest commit, then create one.
+                flow = bucket.getFlowOrCreate(flowId);
+            } else {
+                // Otherwise non-existing flow means it's already deleted.
+                final Optional<Flow> flowOpt = bucket.getFlow(flowId);
+                if (flowOpt.isPresent()) {
+                    flow = flowOpt.get();
+                } else {
+                    logger.debug("Flow {} does not exist in bucket {}:{} any longer. It may have been deleted.", flowId, bucket.getBucketName(), bucket.getBucketId());
+                    continue;
+                }
+            }
+
             final int version = (int) flowMeta.get(VER);
             final String flowSnapshotFilename = (String) flowMeta.get(FILE);
 
@@ -167,6 +199,11 @@ class GitFlowMetaData {
                 final Flow.FlowPointer pointer = new Flow.FlowPointer(flowSnapshotFilename);
                 final File flowSnapshotFile = new File(new File(backetFilePath).getParent(), flowSnapshotFilename);
                 final ObjectId objectId = flowSnapshotObjectIds.get(flowSnapshotFile.getPath());
+                if (objectId == null) {
+                    logger.warn("Git object id for Flow {} version {} with path {} in bucket {}:{} was not found. Ignoring this entry.",
+                            flowId, version, flowSnapshotFile.getPath(), bucket.getBucketName(), bucket.getBucketId());
+                    continue;
+                }
                 pointer.setGitRev(commit.getName());
                 pointer.setObjectId(objectId.getName());
                 flow.putVersion(version, pointer);
@@ -203,38 +240,51 @@ class GitFlowMetaData {
         }
     }
 
+    /**
+     * Create a Git commit.
+     * @param message Commit message.
+     * @param bucket A bucket to commit.
+     * @param flowPointer A flow pointer for the flow snapshot which is updated.
+     *                    After a commit is created, new commit rev id and flow snapshot file object id are set to this pointer.
+     *                    It can be null if none of flow content is modified.
+     */
     // TODO: Write lock
     void commit(String message, Bucket bucket, Flow.FlowPointer flowPointer) throws GitAPIException, IOException {
         try (final Git git = new Git(gitRepo)) {
-            final AddCommand add = git.add();
-            add.addFilepattern(bucket.getBucketName());
-            add.call();
+            // Execute add command for newly added files (if any).
+            git.add().addFilepattern(bucket.getBucketName()).call();
+
+            // Execute add command again for deleted files (if any).
+            git.add().addFilepattern(bucket.getBucketName()).setUpdate(true).call();
 
             final RevCommit commit = git.commit()
                     .setMessage(message)
                     .call();
 
-            final RevTree tree = commit.getTree();
-            final String flowSnapshotPath = new File(bucket.getBucketName(), flowPointer.getFileName()).getPath();
-            try (final TreeWalk treeWalk = new TreeWalk(gitRepo)) {
-                treeWalk.addTree(tree);
+            if (flowPointer != null) {
+                final RevTree tree = commit.getTree();
+                final String flowSnapshotPath = new File(bucket.getBucketName(), flowPointer.getFileName()).getPath();
+                try (final TreeWalk treeWalk = new TreeWalk(gitRepo)) {
+                    treeWalk.addTree(tree);
 
-                while (treeWalk.next()) {
-                    if (treeWalk.isSubtree()) {
-                        treeWalk.enterSubtree();
-                    } else {
-                        final String pathString = treeWalk.getPathString();
-                        if (pathString.equals(flowSnapshotPath)) {
-                            // Capture updated object id.
-                            final String flowSnapshotObjectId = treeWalk.getObjectId(0).getName();
-                            flowPointer.setObjectId(flowSnapshotObjectId);
-                            break;
+                    while (treeWalk.next()) {
+                        if (treeWalk.isSubtree()) {
+                            treeWalk.enterSubtree();
+                        } else {
+                            final String pathString = treeWalk.getPathString();
+                            if (pathString.equals(flowSnapshotPath)) {
+                                // Capture updated object id.
+                                final String flowSnapshotObjectId = treeWalk.getObjectId(0).getName();
+                                flowPointer.setObjectId(flowSnapshotObjectId);
+                                break;
+                            }
                         }
                     }
                 }
+
+                flowPointer.setGitRev(commit.getName());
             }
 
-            flowPointer.setGitRev(commit.getName());
         }
     }
 

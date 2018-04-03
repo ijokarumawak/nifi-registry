@@ -39,7 +39,8 @@ import static java.lang.String.format;
 public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
 
     private static final Logger logger = LoggerFactory.getLogger(GitFlowMetaData.class);
-    static final String FLOW_STORAGE_DIR_PROP = "Flow Storage Directory";
+    private static final String FLOW_STORAGE_DIR_PROP = "Flow Storage Directory";
+    static final String SNAPSHOT_EXTENSION = ".snapshot";
 
     private File flowStorageDir;
     private GitFlowMetaData flowMetaData;
@@ -82,11 +83,12 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
         bucket.setBucketName(context.getBucketName());
 
         final Flow flow = bucket.getFlowOrCreate(context.getFlowId());
-        final Flow.FlowPointer flowPointer = new Flow.FlowPointer(context.getFlowName());
+        final String flowSnapshotFilename = context.getFlowName() + SNAPSHOT_EXTENSION;
+        final Flow.FlowPointer flowPointer = new Flow.FlowPointer(flowSnapshotFilename);
         flow.putVersion(context.getVersion(), flowPointer);
 
         final File bucketDir = new File(flowStorageDir, bucket.getBucketName());
-        final File flowSnippetFile = new File(bucketDir, context.getFlowName());
+        final File flowSnippetFile = new File(bucketDir, flowSnapshotFilename);
         final File bucketFile = new File(bucketDir, GitFlowMetaData.BUCKET_FILENAME);
 
 
@@ -118,19 +120,8 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
     @Override
     public byte[] getFlowContent(String bucketId, String flowId, int version) throws FlowPersistenceException {
 
-        final Optional<Bucket> bucketOpt = flowMetaData.getBucket(bucketId);
-        if (!bucketOpt.isPresent()) {
-            throw new FlowPersistenceException(format("Bucket ID %s was not found.", bucketId));
-        }
-
-        final Bucket bucket = bucketOpt.get();
-        final Optional<Flow> flowOpt = bucket.getFlow(flowId);
-        if (!flowOpt.isPresent()) {
-            throw new FlowPersistenceException(format("Flow ID %s was not found in bucket %s:%s.",
-                    flowId, bucket.getBucketName(), bucketId));
-        }
-
-        final Flow flow = flowOpt.get();
+        final Bucket bucket = getBucketOrFail(bucketId);
+        final Flow flow = getFlowOrFail(bucket, flowId);
         if (!flow.hasVersion(version)) {
             throw new FlowPersistenceException(format("Flow ID %s version %d was not found in bucket %s:%s.",
                     flowId, version, bucket.getBucketName(), bucketId));
@@ -141,18 +132,75 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
             return flowMetaData.getContent(flowPointer.getObjectId());
         } catch (IOException e) {
             throw new FlowPersistenceException(format("Failed to get content of Flow ID %s version %d in bucket %s:%s due to %s.",
-                    flowId, version, bucket.getBucketName(), bucketId, e.getMessage()), e);
+                    flowId, version, bucket.getBucketName(), bucketId, e), e);
         }
     }
 
+    // TODO: Need to add userId argument.
     @Override
     public void deleteAllFlowContent(String bucketId, String flowId) throws FlowPersistenceException {
+        final Bucket bucket = getBucketOrFail(bucketId);
+        final Flow flow = getFlowOrFail(bucket, flowId);
+        final Integer latestVersion = flow.getLatestVersion();
+        final Flow.FlowPointer flowPointer = flow.getFlowVersion(latestVersion);
 
+        // Delete the flow snapshot.
+        final File bucketDir = new File(flowStorageDir, bucket.getBucketName());
+        final File flowSnapshotFile = new File(bucketDir, flowPointer.getFileName());
+        if (flowSnapshotFile.exists()) {
+            if (!flowSnapshotFile.delete()) {
+                throw new FlowPersistenceException(format("Failed to delete flow content for %s:%s in bucket %s:%s",
+                        flowPointer.getFileName(), flowId, bucket.getBucketName(), bucketId));
+            }
+        }
+
+        bucket.removeFlow(flowId);
+
+        try {
+
+            if (bucket.isEmpty()) {
+                // delete bucket dir if this is the last flow.
+                FileUtils.deleteFile(bucketDir, true);
+            } else {
+                // Write a bucket file.
+                final File bucketFile = new File(bucketDir, GitFlowMetaData.BUCKET_FILENAME);
+                flowMetaData.saveBucket(bucket, bucketFile);
+            }
+
+            // Create a Git Commit.
+            final String commitMessage = format("Deleted flow %s:%s in bucket %s:%s.",
+                    flowPointer.getFileName(), flowId, bucket.getBucketName(), bucketId);
+            flowMetaData.commit(commitMessage, bucket, null);
+
+        } catch (IOException|GitAPIException e) {
+            throw new FlowPersistenceException(format("Failed to delete flow %s:%s in bucket %s:%s due to %s",
+                    flowPointer.getFileName(), flowId, bucket.getBucketName(), bucketId, e), e);
+        }
+
+    }
+
+    private Bucket getBucketOrFail(String bucketId) throws FlowPersistenceException {
+        final Optional<Bucket> bucketOpt = flowMetaData.getBucket(bucketId);
+        if (!bucketOpt.isPresent()) {
+            throw new FlowPersistenceException(format("Bucket ID %s was not found.", bucketId));
+        }
+
+        return bucketOpt.get();
+    }
+
+    private Flow getFlowOrFail(Bucket bucket, String flowId) throws FlowPersistenceException {
+        final Optional<Flow> flowOpt = bucket.getFlow(flowId);
+        if (!flowOpt.isPresent()) {
+            throw new FlowPersistenceException(format("Flow ID %s was not found in bucket %s:%s.",
+                    flowId, bucket.getBucketName(), bucket.getBucketId()));
+        }
+
+        return flowOpt.get();
     }
 
     @Override
     public void deleteFlowContent(String bucketId, String flowId, int version) throws FlowPersistenceException {
-
+        // TODO: Do nothing? This signature is not used. Actually there's nothing to do to the old versions as those exist in old commits even if this method is called.
     }
 
 }
