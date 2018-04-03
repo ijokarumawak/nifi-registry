@@ -80,10 +80,18 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
 
         final String bucketId = context.getBucketId();
         final Bucket bucket = flowMetaData.getBucketOrCreate(bucketId);
-        bucket.setBucketName(context.getBucketName());
+        final String currentBucketName = bucket.getBucketName();
+        final String bucketName = context.getBucketName();
+        final boolean isBucketNameChanged = !bucketName.equals(currentBucketName);
+        bucket.setBucketName(bucketName);
 
         final Flow flow = bucket.getFlowOrCreate(context.getFlowId());
         final String flowSnapshotFilename = context.getFlowName() + SNAPSHOT_EXTENSION;
+
+        final Optional<String> currentFlowSnapshotFilename = flow
+                .getLatestVersion().map(flow::getFlowVersion).map(Flow.FlowPointer::getFileName);
+
+        // Add new version.
         final Flow.FlowPointer flowPointer = new Flow.FlowPointer(flowSnapshotFilename);
         flow.putVersion(context.getVersion(), flowPointer);
 
@@ -91,11 +99,30 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
         final File flowSnippetFile = new File(bucketDir, flowSnapshotFilename);
         final File bucketFile = new File(bucketDir, GitFlowMetaData.BUCKET_FILENAME);
 
+        final File currentBucketDir = new File(flowStorageDir, currentBucketName);
+        if (currentBucketDir.isDirectory()) {
+            if (isBucketNameChanged) {
+                logger.debug("Detected bucket name change from {} to {}, moving it.", currentBucketName, bucketName);
+                if (!currentBucketDir.renameTo(bucketDir)) {
+                    throw new FlowPersistenceException(format("Failed to move existing bucket %s to %s.", currentBucketDir, bucketDir));
+                }
+            }
+        } else {
+            if (!bucketDir.mkdirs()) {
+                throw new FlowPersistenceException(format("Failed to create new bucket dir %s.", bucketDir));
+            }
+        }
 
-        final boolean mkdirs = bucketDir.mkdirs();
-        logger.debug("Bucket directory creation result={}", mkdirs);
 
         try {
+            if (currentFlowSnapshotFilename.isPresent() && !flowSnapshotFilename.equals(currentFlowSnapshotFilename.get())) {
+                // Delete old file if flow name has been changed.
+                final File latestFlowSnapshotFile = new File(bucketDir, currentFlowSnapshotFilename.get());
+                logger.debug("Detected flow name change from {} to {}, deleting the old snapshot file.",
+                        currentFlowSnapshotFilename.get(), flowSnapshotFilename);
+                latestFlowSnapshotFile.delete();
+            }
+
             // Save the content.
             try (final OutputStream os = new FileOutputStream(flowSnippetFile)) {
                 os.write(content);
@@ -112,8 +139,6 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
             throw new FlowPersistenceException("Failed to persist flow.", e);
         }
 
-        // TODO: Handle Bucket name change.
-        // TODO: Handle Flow name change.
         // TODO: What if user rebased commits? Version number to Commit ID mapping will be broken.
     }
 
@@ -141,7 +166,12 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
     public void deleteAllFlowContent(String bucketId, String flowId) throws FlowPersistenceException {
         final Bucket bucket = getBucketOrFail(bucketId);
         final Flow flow = getFlowOrFail(bucket, flowId);
-        final Integer latestVersion = flow.getLatestVersion();
+        final Optional<Integer> latestVersionOpt = flow.getLatestVersion();
+        if (!latestVersionOpt.isPresent()) {
+            throw new IllegalStateException("Flow version is not added yet, can not be deleted.");
+        }
+
+        final Integer latestVersion = latestVersionOpt.get();
         final Flow.FlowPointer flowPointer = flow.getFlowVersion(latestVersion);
 
         // Delete the flow snapshot.
