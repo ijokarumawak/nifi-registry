@@ -23,22 +23,18 @@ import org.apache.nifi.registry.flow.FlowSnapshotContext;
 import org.apache.nifi.registry.provider.ProviderConfigurationContext;
 import org.apache.nifi.registry.provider.ProviderCreationException;
 import org.apache.nifi.registry.util.FileUtils;
-import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;
-import org.eclipse.jgit.lib.Repository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.yaml.snakeyaml.Yaml;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.io.OutputStreamWriter;
-import java.io.Writer;
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Optional;
+
+import static java.lang.String.format;
 
 public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
 
@@ -78,13 +74,16 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
 
         // TODO: Check if working dir is clean, any uncommitted file?
 
+        // TODO: Handle bucket name change
+        // TODO: Handle flow name change
+
         final String bucketId = context.getBucketId();
         final Bucket bucket = flowMetaData.getBucketOrCreate(bucketId);
         bucket.setBucketName(context.getBucketName());
 
         final Flow flow = bucket.getFlowOrCreate(context.getFlowId());
-        final Flow.FlowPointer pointer = new Flow.FlowPointer(context.getFlowName());
-        flow.putVersion(context.getVersion(), pointer);
+        final Flow.FlowPointer flowPointer = new Flow.FlowPointer(context.getFlowName());
+        flow.putVersion(context.getVersion(), flowPointer);
 
         final File bucketDir = new File(flowStorageDir, bucket.getBucketName());
         final File flowSnippetFile = new File(bucketDir, context.getFlowName());
@@ -105,8 +104,7 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
             flowMetaData.saveBucket(bucket, bucketFile);
 
             // Create a Git Commit.
-            final String commitId = flowMetaData.commit(context.getComments(), bucket.getBucketName());
-            pointer.setGitRev(commitId);
+            flowMetaData.commit(context.getComments(), bucket, flowPointer);
 
         } catch (IOException|GitAPIException e) {
             throw new FlowPersistenceException("Failed to persist flow.", e);
@@ -122,28 +120,29 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
 
         final Optional<Bucket> bucketOpt = flowMetaData.getBucket(bucketId);
         if (!bucketOpt.isPresent()) {
-            throw new FlowPersistenceException(String.format("Bucket ID %s was not found.", bucketId));
+            throw new FlowPersistenceException(format("Bucket ID %s was not found.", bucketId));
         }
 
         final Bucket bucket = bucketOpt.get();
         final Optional<Flow> flowOpt = bucket.getFlow(flowId);
         if (!flowOpt.isPresent()) {
-            throw new FlowPersistenceException(String.format("Flow ID %s was not found in bucket %s:%s.",
-                    flowId, bucket.getBucketName(), bucket.getBucketId()));
+            throw new FlowPersistenceException(format("Flow ID %s was not found in bucket %s:%s.",
+                    flowId, bucket.getBucketName(), bucketId));
         }
 
         final Flow flow = flowOpt.get();
         if (!flow.hasVersion(version)) {
-            throw new FlowPersistenceException(String.format("Flow ID %s version %d was not found in bucket %s:%s.",
-                    flowId, version, bucket.getBucketName(), bucket.getBucketId()));
+            throw new FlowPersistenceException(format("Flow ID %s version %d was not found in bucket %s:%s.",
+                    flowId, version, bucket.getBucketName(), bucketId));
         }
 
-        // TODO: Get ObjectId and Load flow binary.
         final Flow.FlowPointer flowPointer = flow.getFlowVersion(version);
-
-
-
-        return new byte[0];
+        try {
+            return flowMetaData.getContent(flowPointer.getObjectId());
+        } catch (IOException e) {
+            throw new FlowPersistenceException(format("Failed to get content of Flow ID %s version %d in bucket %s:%s due to %s.",
+                    flowId, version, bucket.getBucketName(), bucketId, e.getMessage()), e);
+        }
     }
 
     @Override

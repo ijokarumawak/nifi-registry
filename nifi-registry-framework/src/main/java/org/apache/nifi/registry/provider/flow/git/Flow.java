@@ -49,6 +49,7 @@ class Flow {
 
     public static class FlowPointer {
         private String gitRev;
+        private String objectId;
         private final String fileName;
 
         public FlowPointer(String fileName) {
@@ -65,6 +66,14 @@ class Flow {
 
         public String getFileName() {
             return fileName;
+        }
+
+        public String getObjectId() {
+            return objectId;
+        }
+
+        public void setObjectId(String objectId) {
+            this.objectId = objectId;
         }
     }
 

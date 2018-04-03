@@ -107,6 +107,7 @@ public class TestGitFlowPersistenceProvider {
     public void testLoadGitRepository() throws IOException, GitAPIException {
         final GitFlowMetaData metaData = new GitFlowMetaData();
         metaData.loadGitRepository(new File("/Users/koji/dev/nifi-registry-data-test"));
+        System.out.println(metaData);
     }
 
 }

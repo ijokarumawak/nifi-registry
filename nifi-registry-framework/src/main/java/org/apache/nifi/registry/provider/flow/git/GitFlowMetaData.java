@@ -84,6 +84,7 @@ class GitFlowMetaData {
 
                     // Path -> ObjectId
                     final Map<String, ObjectId> bucketObjectIds = new HashMap<>();
+                    final Map<String, ObjectId> flowSnapshotObjectIds = new HashMap<>();
                     while (treeWalk.next()) {
                         if (treeWalk.isSubtree()) {
                             treeWalk.enterSubtree();
@@ -92,6 +93,9 @@ class GitFlowMetaData {
                             // TODO: what is this nth?? When does it get grater than 0? Tree count seems to be always 1..
                             if (pathString.endsWith("/" + BUCKET_FILENAME)) {
                                 bucketObjectIds.put(pathString, treeWalk.getObjectId(0));
+                            } else {
+                                // TODO: filter by extension, e.g. snapshot?
+                                flowSnapshotObjectIds.put(pathString, treeWalk.getObjectId(0));
                             }
                         }
                     }
@@ -101,30 +105,30 @@ class GitFlowMetaData {
                         continue;
                     }
 
-                    loadBuckets(gitRepo, commit, bucketObjectIds);
+                    loadBuckets(gitRepo, commit, bucketObjectIds, flowSnapshotObjectIds);
                 }
             }
         }
     }
 
     @SuppressWarnings("unchecked")
-    private void loadBuckets(Repository gitRepo, RevCommit commit, Map<String, ObjectId> bucketObjectIds) throws IOException {
+    private void loadBuckets(Repository gitRepo, RevCommit commit, Map<String, ObjectId> bucketObjectIds, Map<String, ObjectId> flowSnapshotObjectIds) throws IOException {
         final Yaml yaml = new Yaml();
-        for (String path : bucketObjectIds.keySet()) {
-            final ObjectId bucketObjectId = bucketObjectIds.get(path);
+        for (String bucketFilePath : bucketObjectIds.keySet()) {
+            final ObjectId bucketObjectId = bucketObjectIds.get(bucketFilePath);
             final Map<String, Object> bucketMeta;
             try (InputStream bucketIn = gitRepo.newObjectReader().open(bucketObjectId).openStream()) {
                 bucketMeta = yaml.load(bucketIn);
             }
 
-            if (!validateRequiredValue(bucketMeta, path, LAYOUT_VERSION, BUCKET_ID, FLOWS)) {
+            if (!validateRequiredValue(bucketMeta, bucketFilePath, LAYOUT_VERSION, BUCKET_ID, FLOWS)) {
                 continue;
             }
 
             int layoutVersion = (int) bucketMeta.get(LAYOUT_VERSION);
             if (layoutVersion > CURRENT_LAYOUT_VERSION) {
                 logger.warn("{} has unsupported {} {}. This Registry can only support {} or lower. Skipping it.",
-                        path, LAYOUT_VERSION, layoutVersion, CURRENT_LAYOUT_VERSION);
+                        bucketFilePath, LAYOUT_VERSION, layoutVersion, CURRENT_LAYOUT_VERSION);
                 continue;
             }
 
@@ -132,7 +136,7 @@ class GitFlowMetaData {
             final Bucket bucket = getBucketOrCreate(bucketId);
 
             // E.g. DirA/DirB/DirC/bucket.yml -> DirC will be the bucket name.
-            final String[] pathNames = path.split("/");
+            final String[] pathNames = bucketFilePath.split("/");
             final String bucketName = pathNames[pathNames.length - 2];
 
             // Since commits are read in LIFO order, avoid old commits overriding the latest bucket name.
@@ -141,28 +145,30 @@ class GitFlowMetaData {
             }
 
             final Map<String, Object> flows = (Map<String, Object>) bucketMeta.get(FLOWS);
-            loadFlows(commit, bucket, path, flows);
+            loadFlows(commit, bucket, bucketFilePath, flows, flowSnapshotObjectIds);
         }
     }
 
     @SuppressWarnings("unchecked")
-    private void loadFlows(RevCommit commit, Bucket bucket, String path, Map<String, Object> flows) {
+    private void loadFlows(RevCommit commit, Bucket bucket, String backetFilePath, Map<String, Object> flows, Map<String, ObjectId> flowSnapshotObjectIds) {
         for (String flowId : flows.keySet()) {
             final Map<String, Object> flowMeta = (Map<String, Object>) flows.get(flowId);
 
-            if (!validateRequiredValue(flowMeta, path + ":" + flowId, VER, FILE)) {
+            if (!validateRequiredValue(flowMeta, backetFilePath + ":" + flowId, VER, FILE)) {
                 continue;
             }
 
             final Flow flow = bucket.getFlowOrCreate(flowId);
             final int version = (int) flowMeta.get(VER);
-            final String file = (String) flowMeta.get(FILE);
+            final String flowSnapshotFilename = (String) flowMeta.get(FILE);
 
             // Since commits are read in LIFO order, avoid old commits overriding the latest pointer.
             if (!flow.hasVersion(version)) {
-                // TODO: Add bucket name to FlowPointer.fil, or capture flow objectId so that we can handle Bucket name changes
-                final Flow.FlowPointer pointer = new Flow.FlowPointer(file);
+                final Flow.FlowPointer pointer = new Flow.FlowPointer(flowSnapshotFilename);
+                final File flowSnapshotFile = new File(new File(backetFilePath).getParent(), flowSnapshotFilename);
+                final ObjectId objectId = flowSnapshotObjectIds.get(flowSnapshotFile.getPath());
                 pointer.setGitRev(commit.getName());
+                pointer.setObjectId(objectId.getName());
                 flow.putVersion(version, pointer);
             }
         }
@@ -198,20 +204,43 @@ class GitFlowMetaData {
     }
 
     // TODO: Write lock
-    String commit(String message, String ... files) throws GitAPIException {
+    void commit(String message, Bucket bucket, Flow.FlowPointer flowPointer) throws GitAPIException, IOException {
         try (final Git git = new Git(gitRepo)) {
             final AddCommand add = git.add();
-            for (String file : files) {
-                add.addFilepattern(file);
-            }
+            add.addFilepattern(bucket.getBucketName());
             add.call();
 
             final RevCommit commit = git.commit()
                     .setMessage(message)
                     .call();
-            return commit.getName();
+
+            final RevTree tree = commit.getTree();
+            final String flowSnapshotPath = new File(bucket.getBucketName(), flowPointer.getFileName()).getPath();
+            try (final TreeWalk treeWalk = new TreeWalk(gitRepo)) {
+                treeWalk.addTree(tree);
+
+                while (treeWalk.next()) {
+                    if (treeWalk.isSubtree()) {
+                        treeWalk.enterSubtree();
+                    } else {
+                        final String pathString = treeWalk.getPathString();
+                        if (pathString.equals(flowSnapshotPath)) {
+                            // Capture updated object id.
+                            final String flowSnapshotObjectId = treeWalk.getObjectId(0).getName();
+                            flowPointer.setObjectId(flowSnapshotObjectId);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            flowPointer.setGitRev(commit.getName());
         }
     }
 
+    byte[] getContent(String objectId) throws IOException {
+        final ObjectId flowSnapshotObjectId = gitRepo.resolve(objectId);
+        return gitRepo.newObjectReader().open(flowSnapshotObjectId).getBytes();
+    }
 
 }
