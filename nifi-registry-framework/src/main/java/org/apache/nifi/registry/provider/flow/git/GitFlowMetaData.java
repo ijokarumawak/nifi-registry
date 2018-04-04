@@ -252,10 +252,10 @@ class GitFlowMetaData {
     void commit(String message, Bucket bucket, Flow.FlowPointer flowPointer) throws GitAPIException, IOException {
         try (final Git git = new Git(gitRepo)) {
             // Execute add command for newly added files (if any).
-            git.add().addFilepattern(bucket.getBucketName()).call();
+            git.add().addFilepattern(".").call();
 
             // Execute add command again for deleted files (if any).
-            git.add().addFilepattern(bucket.getBucketName()).setUpdate(true).call();
+            git.add().addFilepattern(".").setUpdate(true).call();
 
             final RevCommit commit = git.commit()
                     .setMessage(message)
