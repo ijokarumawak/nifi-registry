@@ -122,8 +122,8 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
         final File flowSnippetFile = new File(bucketDir, flowSnapshotFilename);
         final File bucketFile = new File(bucketDir, GitFlowMetaData.BUCKET_FILENAME);
 
-        final File currentBucketDir = new File(flowStorageDir, currentBucketName);
-        if (currentBucketDir.isDirectory()) {
+        final File currentBucketDir = isEmpty(currentBucketName) ? null : new File(flowStorageDir, currentBucketName);
+        if (currentBucketDir != null && currentBucketDir.isDirectory()) {
             if (isBucketNameChanged) {
                 logger.debug("Detected bucket name change from {} to {}, moving it.", currentBucketName, bucketName);
                 if (!currentBucketDir.renameTo(bucketDir)) {
