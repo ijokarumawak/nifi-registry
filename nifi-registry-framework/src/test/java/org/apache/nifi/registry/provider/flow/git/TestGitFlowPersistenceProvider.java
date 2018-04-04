@@ -17,6 +17,8 @@
 package org.apache.nifi.registry.provider.flow.git;
 
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.Status;
+import org.eclipse.jgit.api.StatusCommand;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectLoader;
@@ -26,11 +28,13 @@ import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevTree;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
+import org.eclipse.jgit.transport.RemoteConfig;
 import org.eclipse.jgit.treewalk.TreeWalk;
 import org.junit.Test;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 
 public class TestGitFlowPersistenceProvider {
@@ -54,6 +58,29 @@ public class TestGitFlowPersistenceProvider {
         }
     }
 
+    @Test
+    public void testStatus() throws IOException, GitAPIException {
+        final Repository gitRepo = new FileRepositoryBuilder()
+                .readEnvironment()
+                .findGitDir(new File("/Users/koji/dev/nifi-registry-data-test"))
+                .build();
+
+        System.out.printf("gitRepo=%s\n", gitRepo);
+
+        final Status status = new Git(gitRepo).status().call();
+        System.out.printf("status=%s\n", status);
+    }
+
+    @Test
+    public void testRemote() throws IOException, GitAPIException {
+        final Repository gitRepo = new FileRepositoryBuilder()
+                .readEnvironment()
+                .findGitDir(new File("/Users/koji/dev/nifi-registry-data-test"))
+                .build();
+
+        final List<RemoteConfig> remotes = new Git(gitRepo).remoteList().call();
+        System.out.printf("remotes=%s\n", remotes);
+    }
 
     @Test
     public void test() throws IOException {

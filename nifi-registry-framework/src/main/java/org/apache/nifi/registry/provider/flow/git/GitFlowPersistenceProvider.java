@@ -35,11 +35,15 @@ import java.util.Map;
 import java.util.Optional;
 
 import static java.lang.String.format;
+import static org.apache.commons.lang3.StringUtils.isEmpty;
 
 public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
 
     private static final Logger logger = LoggerFactory.getLogger(GitFlowMetaData.class);
     private static final String FLOW_STORAGE_DIR_PROP = "Flow Storage Directory";
+    private static final String REMOTE_TO_PUSH = "Remote To Push";
+    private static final String REMOTE_ACCESS_USER = "Remote Access User";
+    private static final String REMOTE_ACCESS_PASSWORD = "Remote Access Password";
     static final String SNAPSHOT_EXTENSION = ".snapshot";
 
     private File flowStorageDir;
@@ -55,8 +59,21 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
         }
 
         final String flowStorageDirValue = props.get(FLOW_STORAGE_DIR_PROP);
-        if (StringUtils.isBlank(flowStorageDirValue)) {
+        if (isEmpty(flowStorageDirValue)) {
             throw new ProviderCreationException("The property " + FLOW_STORAGE_DIR_PROP + " cannot be null or blank");
+        }
+
+        flowMetaData.setRemoteToPush(props.get(REMOTE_TO_PUSH));
+
+        final String remoteUser = props.get(REMOTE_ACCESS_USER);
+        final String remotePassword = props.get(REMOTE_ACCESS_PASSWORD);
+        if (!isEmpty(remoteUser) && isEmpty(remotePassword)) {
+            throw new ProviderCreationException(format("The property %s is specified but %s is not." +
+                    " %s is required for username password authentication.",
+                    REMOTE_ACCESS_USER, REMOTE_ACCESS_PASSWORD, REMOTE_ACCESS_PASSWORD));
+        }
+        if (!isEmpty(remotePassword)) {
+            flowMetaData.setRemoteCredential(remoteUser, remotePassword);
         }
 
         try {
@@ -73,10 +90,17 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
     @Override
     public void saveFlowContent(FlowSnapshotContext context, byte[] content) throws FlowPersistenceException {
 
-        // TODO: Check if working dir is clean, any uncommitted file?
-
-        // TODO: Handle bucket name change
-        // TODO: Handle flow name change
+        try {
+            // Check if working dir is clean, any uncommitted file?
+            if (!flowMetaData.isGitDirectoryClean()) {
+                throw new FlowPersistenceException(format("Git directory %s is not clean" +
+                                " or has uncommitted changes, resolve those changes first to save flow contents.",
+                        flowStorageDir));
+            }
+        } catch (GitAPIException e) {
+            throw new FlowPersistenceException(format("Failed to get Git status for directory %s due to %s",
+                    flowStorageDir, e));
+        }
 
         final String bucketId = context.getBucketId();
         final Bucket bucket = flowMetaData.getBucketOrCreate(bucketId);

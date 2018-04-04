@@ -16,15 +16,19 @@
  */
 package org.apache.nifi.registry.provider.flow.git;
 
-import org.apache.commons.lang3.StringUtils;
-import org.eclipse.jgit.api.AddCommand;
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.PushCommand;
+import org.eclipse.jgit.api.Status;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevTree;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
+import org.eclipse.jgit.transport.CredentialsProvider;
+import org.eclipse.jgit.transport.PushResult;
+import org.eclipse.jgit.transport.RemoteConfig;
+import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider;
 import org.eclipse.jgit.treewalk.TreeWalk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,8 +42,13 @@ import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
+
+import static java.lang.String.format;
+import static org.apache.commons.lang3.StringUtils.isEmpty;
 
 class GitFlowMetaData {
 
@@ -55,11 +64,21 @@ class GitFlowMetaData {
     private static final Logger logger = LoggerFactory.getLogger(GitFlowMetaData.class);
 
     private Repository gitRepo;
+    private String remoteToPush;
+    private CredentialsProvider credentialsProvider;
 
     /**
      * Bucket ID to Bucket.
      */
     private Map<String, Bucket> buckets = new HashMap<>();
+
+    public void setRemoteToPush(String remoteToPush) {
+        this.remoteToPush = remoteToPush;
+    }
+
+    public void setRemoteCredential(String userName, String password) {
+        this.credentialsProvider = new UsernamePasswordCredentialsProvider(userName, password);
+    }
 
     private Repository openRepository(final File gitProjectRootDir) throws IOException {
         // TODO: What if the directory doesn't exist?
@@ -76,6 +95,18 @@ class GitFlowMetaData {
         gitRepo = openRepository(gitProjectRootDir);
 
         try (final Git git = new Git(gitRepo)) {
+
+            // Check if remote exists.
+            if (!isEmpty(remoteToPush)) {
+                final List<RemoteConfig> remotes = git.remoteList().call();
+                final boolean isRemoteExist = remotes.stream().anyMatch(remote -> remote.getName().equals(remoteToPush));
+                if (!isRemoteExist) {
+                    final List<String> remoteNames = remotes.stream().map(RemoteConfig::getName).collect(Collectors.toList());
+                    throw new IllegalArgumentException(
+                            format("The configured remote '%s' to push does not exist. Available remotes are %s", remoteToPush, remoteNames));
+                }
+            }
+
             boolean isLatestCommit = true;
             for (RevCommit commit : git.log().call()) {
                 final String shortCommitId = commit.getId().abbreviate(7).name();
@@ -158,7 +189,7 @@ class GitFlowMetaData {
             final String bucketName = pathNames[pathNames.length - 2];
 
             // Since commits are read in LIFO order, avoid old commits overriding the latest bucket name.
-            if (StringUtils.isEmpty(bucket.getBucketName())) {
+            if (isEmpty(bucket.getBucketName())) {
                 bucket.setBucketName(bucketName);
             }
 
@@ -240,6 +271,11 @@ class GitFlowMetaData {
         }
     }
 
+    boolean isGitDirectoryClean() throws GitAPIException {
+        final Status status = new Git(gitRepo).status().call();
+        return status.isClean() && !status.hasUncommittedChanges();
+    }
+
     /**
      * Create a Git commit.
      * @param message Commit message.
@@ -248,7 +284,6 @@ class GitFlowMetaData {
      *                    After a commit is created, new commit rev id and flow snapshot file object id are set to this pointer.
      *                    It can be null if none of flow content is modified.
      */
-    // TODO: Write lock
     void commit(String message, Bucket bucket, Flow.FlowPointer flowPointer) throws GitAPIException, IOException {
         try (final Git git = new Git(gitRepo)) {
             // Execute add command for newly added files (if any).
@@ -283,6 +318,20 @@ class GitFlowMetaData {
                 }
 
                 flowPointer.setGitRev(commit.getName());
+            }
+
+            // Push if necessary.
+            if (!isEmpty(remoteToPush)) {
+                logger.debug("Pushing to {}...", remoteToPush);
+                final PushCommand pushCommand = new Git(gitRepo).push().setRemote(remoteToPush);
+                if (credentialsProvider != null) {
+                    pushCommand.setCredentialsProvider(credentialsProvider);
+                }
+
+                final Iterable<PushResult> pushResults = pushCommand.call();
+                for (PushResult pushResult : pushResults) {
+                    logger.debug(pushResult.getMessages());
+                }
             }
 
         }
