@@ -16,7 +16,6 @@
  */
 package org.apache.nifi.registry.provider.flow.git;
 
-import org.apache.commons.lang3.StringUtils;
 import org.apache.nifi.registry.flow.FlowPersistenceException;
 import org.apache.nifi.registry.flow.FlowPersistenceProvider;
 import org.apache.nifi.registry.flow.FlowSnapshotContext;
