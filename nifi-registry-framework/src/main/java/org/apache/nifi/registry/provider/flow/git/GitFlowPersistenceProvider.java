@@ -156,7 +156,7 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
             flowMetaData.saveBucket(bucket, bucketFile);
 
             // Create a Git Commit.
-            flowMetaData.commit(context.getComments(), bucket, flowPointer);
+            flowMetaData.commit(context.getAuthor(), context.getComments(), bucket, flowPointer);
 
         } catch (IOException|GitAPIException e) {
             throw new FlowPersistenceException("Failed to persist flow.", e);
@@ -184,7 +184,7 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
         }
     }
 
-    // TODO: Need to add userId argument.
+    // TODO: Need to add userId argument?
     @Override
     public void deleteAllFlowContent(String bucketId, String flowId) throws FlowPersistenceException {
         final Bucket bucket = getBucketOrFail(bucketId);
@@ -223,7 +223,7 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
             // Create a Git Commit.
             final String commitMessage = format("Deleted flow %s:%s in bucket %s:%s.",
                     flowPointer.getFileName(), flowId, bucket.getBucketName(), bucketId);
-            flowMetaData.commit(commitMessage, bucket, null);
+            flowMetaData.commit(null, commitMessage, bucket, null);
 
         } catch (IOException|GitAPIException e) {
             throw new FlowPersistenceException(format("Failed to delete flow %s:%s in bucket %s:%s due to %s",
