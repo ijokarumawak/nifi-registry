@@ -16,10 +16,6 @@
  */
 package org.apache.nifi.registry.serialization;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.ObjectReader;
 import org.apache.nifi.registry.flow.VersionedProcessGroup;
 import org.apache.nifi.registry.flow.VersionedProcessor;
 import org.junit.Assert;
@@ -27,13 +23,11 @@ import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
-import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.util.HashMap;
-import java.util.Map;
+
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 
 public class TestVersionedProcessGroupSerializer {
 
@@ -70,92 +64,81 @@ public class TestVersionedProcessGroupSerializer {
     }
 
     @Test
-    public void test() throws IOException {
-        parseHeader("/serialization/header.json");
+    public void testDeserializeJsonNonIntegerVersion() throws IOException {
+        final String file = "/serialization/json/non-integer-version.snapshot";
+        final VersionedProcessGroupSerializer serializer = new VersionedProcessGroupSerializer();
+        try (final InputStream is = this.getClass().getResourceAsStream(file)) {
+            try {
+                serializer.deserialize(is);
+                fail("Should fail");
+            } catch (SerializationException e) {
+                assertEquals("Unable to find a process group serializer compatible with the input.", e.getMessage());
+            }
+        }
     }
 
     @Test
-    public void test2() throws IOException {
-        parseHeader("/serialization/header-non-integer-version.json");
+    public void testDeserializeJsonNoVersion() throws IOException {
+        final String file = "/serialization/json/no-version.snapshot";
+        final VersionedProcessGroupSerializer serializer = new VersionedProcessGroupSerializer();
+        try (final InputStream is = this.getClass().getResourceAsStream(file)) {
+            try {
+                serializer.deserialize(is);
+                fail("Should fail");
+            } catch (SerializationException e) {
+                assertEquals("Unable to find a process group serializer compatible with the input.", e.getMessage());
+            }
+        }
     }
 
     @Test
-    public void test3() throws IOException {
-        parseHeader("/serialization/header-no-version.json");
-    }
-
-
-    private void parseHeader(final String file) throws IOException {
-        final ObjectMapper objectMapper = new ObjectMapper();
-        final ObjectReader objectReader = objectMapper.reader();
-
-        final int version;
+    public void testDeserializeJsonVer1() throws IOException {
+        final String file = "/serialization/json/ver1.snapshot";
+        final VersionedProcessGroupSerializer serializer = new VersionedProcessGroupSerializer();
+        final VersionedProcessGroup processGroup;
         try (final InputStream is = this.getClass().getResourceAsStream(file)) {
-
-            final int maxHeaderBytes = 1024;
-            final byte[] headerBytes = new byte[maxHeaderBytes];
-            final int readHeaderBytes = is.read(headerBytes);
-
-            // Seek '"header"'.
-            final String headerKeyword = "\"header\"";
-            final String headerStr = new String(headerBytes, StandardCharsets.UTF_8);
-            final int headerIndex = headerStr.indexOf(headerKeyword);
-            if (headerIndex < 0) {
-                throw new SerializationException(String.format("Could not find %s in the first %d bytes",
-                        headerKeyword, readHeaderBytes));
-            }
-
-            final int headerStart = headerStr.indexOf("{", headerIndex);
-            if (headerStart < 0) {
-                throw new SerializationException(String.format("Could not find '{' starting header object in the first %d bytes.", readHeaderBytes));
-            }
-
-            final int headerEnd = headerStr.indexOf("}", headerStart);
-            if (headerEnd < 0) {
-                throw new SerializationException(String.format("Could not find '}' ending header object in the first %d bytes.", readHeaderBytes));
-            }
-
-            final String headerObjectStr = headerStr.substring(headerStart, headerEnd + 1);
-            System.out.printf("headerObjectStr=%s\n", headerObjectStr);
-
-            final JsonNode header = objectReader.readTree(headerObjectStr);
-            final JsonNode versionNode = header.get("formatVersion");
-            if (versionNode == null) {
-                throw new SerializationException("'formatVersion' was not found in the header.");
-            }
-            version = versionNode.asInt();
-
+            processGroup = serializer.deserialize(is);
         }
+        System.out.printf("processGroup=" + processGroup);
+    }
 
-        System.out.printf("version=%d\n", version);
-
-        // Then parse the entire JSON.
+    @Test
+    public void testDeserializeJsonVer2() throws IOException {
+        final String file = "/serialization/json/ver2.snapshot";
+        final VersionedProcessGroupSerializer serializer = new VersionedProcessGroupSerializer();
         try (final InputStream is = this.getClass().getResourceAsStream(file)) {
-            final TypeReference<HashMap> typeRef
-                    = new TypeReference<HashMap>() {};
-            final VersionedProcessGroupContainer container = objectMapper.readValue(is, VersionedProcessGroupContainer.class);
-            System.out.println(container);
+            try {
+                serializer.deserialize(is);
+                fail("Should fail");
+            } catch (SerializationException e) {
+                assertEquals("Data model version 2 is not supported.", e.getMessage());
+            }
         }
     }
 
-    public static class VersionedProcessGroupContainer {
-        private Map<String, Object> header;
-        private VersionedProcessGroup content;
-
-        public Map<String, Object> getHeader() {
-            return header;
+    @Test
+    public void testDeserializeJaxbVer1() throws IOException {
+        final String file = "/serialization/jaxb/ver1.snapshot";
+        final VersionedProcessGroupSerializer serializer = new VersionedProcessGroupSerializer();
+        final VersionedProcessGroup processGroup;
+        try (final InputStream is = this.getClass().getResourceAsStream(file)) {
+            processGroup = serializer.deserialize(is);
         }
+        System.out.printf("processGroup=" + processGroup);
+    }
 
-        public void setHeader(Map<String, Object> header) {
-            this.header = header;
-        }
-
-        public VersionedProcessGroup getContent() {
-            return content;
-        }
-
-        public void setContent(VersionedProcessGroup content) {
-            this.content = content;
+    @Test
+    public void testDeserializeJaxbVer2() throws IOException {
+        final String file = "/serialization/jaxb/ver2.snapshot";
+        final VersionedProcessGroupSerializer serializer = new VersionedProcessGroupSerializer();
+        try (final InputStream is = this.getClass().getResourceAsStream(file)) {
+            try {
+                serializer.deserialize(is);
+                fail("Should fail");
+            } catch (SerializationException e) {
+                assertEquals("Data model version 2 is not supported.", e.getMessage());
+            }
         }
     }
+
 }

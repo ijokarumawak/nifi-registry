@@ -1,6 +1,6 @@
 {
   "header": {
-    "formatVersion": "two"
+    "dataModelVersion": 2
   },
   "content": {}
 }
