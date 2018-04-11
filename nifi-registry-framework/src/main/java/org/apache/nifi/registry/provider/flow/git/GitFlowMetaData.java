@@ -20,6 +20,7 @@ import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.PushCommand;
 import org.eclipse.jgit.api.Status;
 import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.api.errors.NoHeadException;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.UserConfig;
@@ -81,16 +82,42 @@ class GitFlowMetaData {
         this.credentialsProvider = new UsernamePasswordCredentialsProvider(userName, password);
     }
 
+    /**
+     * Open a Git repository using the specified directory.
+     * @param gitProjectRootDir a root directory of a Git project
+     * @return created Repository
+     * @throws IOException thrown when the specified directory does not exist,
+     * does not have read/write privilege or not containing .git directory
+     */
     private Repository openRepository(final File gitProjectRootDir) throws IOException {
-        // TODO: What if the directory doesn't exist?
-        // TODO: What if the directory is not a Git repo?
-        return new FileRepositoryBuilder()
+
+        // Instead of using FileUtils.ensureDirectoryExistAndCanReadAndWrite, check availability manually here.
+        // Because the util will try to create a dir if not exist.
+        // The git dir should be initialized and configured by users.
+        if (!gitProjectRootDir.isDirectory()) {
+            throw new IOException(format("'%s' is not a directory or does not exist.", gitProjectRootDir));
+        }
+
+        if (!(gitProjectRootDir.canRead() && gitProjectRootDir.canWrite())) {
+            throw new IOException(format("Directory '%s' does not have read/write privilege.", gitProjectRootDir));
+        }
+
+        // Search .git dir but avoid searching parent directories.
+        final FileRepositoryBuilder builder = new FileRepositoryBuilder()
                 .readEnvironment()
-                .findGitDir(gitProjectRootDir)
-                .build();
+                .setMustExist(true)
+                .addCeilingDirectory(gitProjectRootDir)
+                .findGitDir(gitProjectRootDir);
+
+        if (builder.getGitDir() == null) {
+            throw new IOException(format("Directory '%s' does not contain a .git directory." +
+                    " Please init and configure the directory with 'git init' command before using it from NiFi Registry.",
+                    gitProjectRootDir));
+        }
+
+        return builder.build();
     }
 
-    // TODO: More Error handling.
     @SuppressWarnings("unchecked")
     public void loadGitRepository(File gitProjectRootDir) throws IOException, GitAPIException {
         gitRepo = openRepository(gitProjectRootDir);
@@ -109,40 +136,44 @@ class GitFlowMetaData {
             }
 
             boolean isLatestCommit = true;
-            for (RevCommit commit : git.log().call()) {
-                final String shortCommitId = commit.getId().abbreviate(7).name();
-                logger.debug("Processing a commit: {}", shortCommitId);
-                final RevTree tree = commit.getTree();
+            try {
+                for (RevCommit commit : git.log().call()) {
+                    final String shortCommitId = commit.getId().abbreviate(7).name();
+                    logger.debug("Processing a commit: {}", shortCommitId);
+                    final RevTree tree = commit.getTree();
 
-                try (final TreeWalk treeWalk = new TreeWalk(gitRepo)) {
-                    treeWalk.addTree(tree);
+                    try (final TreeWalk treeWalk = new TreeWalk(gitRepo)) {
+                        treeWalk.addTree(tree);
 
-                    // Path -> ObjectId
-                    final Map<String, ObjectId> bucketObjectIds = new HashMap<>();
-                    final Map<String, ObjectId> flowSnapshotObjectIds = new HashMap<>();
-                    while (treeWalk.next()) {
-                        if (treeWalk.isSubtree()) {
-                            treeWalk.enterSubtree();
-                        } else {
-                            final String pathString = treeWalk.getPathString();
-                            // TODO: what is this nth?? When does it get grater than 0? Tree count seems to be always 1..
-                            if (pathString.endsWith("/" + BUCKET_FILENAME)) {
-                                bucketObjectIds.put(pathString, treeWalk.getObjectId(0));
-                            } else if (pathString.endsWith(GitFlowPersistenceProvider.SNAPSHOT_EXTENSION)) {
-                                flowSnapshotObjectIds.put(pathString, treeWalk.getObjectId(0));
+                        // Path -> ObjectId
+                        final Map<String, ObjectId> bucketObjectIds = new HashMap<>();
+                        final Map<String, ObjectId> flowSnapshotObjectIds = new HashMap<>();
+                        while (treeWalk.next()) {
+                            if (treeWalk.isSubtree()) {
+                                treeWalk.enterSubtree();
+                            } else {
+                                final String pathString = treeWalk.getPathString();
+                                // TODO: what is this nth?? When does it get grater than 0? Tree count seems to be always 1..
+                                if (pathString.endsWith("/" + BUCKET_FILENAME)) {
+                                    bucketObjectIds.put(pathString, treeWalk.getObjectId(0));
+                                } else if (pathString.endsWith(GitFlowPersistenceProvider.SNAPSHOT_EXTENSION)) {
+                                    flowSnapshotObjectIds.put(pathString, treeWalk.getObjectId(0));
+                                }
                             }
                         }
-                    }
 
-                    if (bucketObjectIds.isEmpty()) {
-                        // No bucket.yml means at this point, all flows are deleted. No need to scan older commits because those are already deleted.
-                        logger.debug("Tree at commit {} does not contain any " + BUCKET_FILENAME + ". Stop loading commits here.", shortCommitId);
-                        return;
-                    }
+                        if (bucketObjectIds.isEmpty()) {
+                            // No bucket.yml means at this point, all flows are deleted. No need to scan older commits because those are already deleted.
+                            logger.debug("Tree at commit {} does not contain any " + BUCKET_FILENAME + ". Stop loading commits here.", shortCommitId);
+                            return;
+                        }
 
-                    loadBuckets(gitRepo, commit, isLatestCommit, bucketObjectIds, flowSnapshotObjectIds);
-                    isLatestCommit = false;
+                        loadBuckets(gitRepo, commit, isLatestCommit, bucketObjectIds, flowSnapshotObjectIds);
+                        isLatestCommit = false;
+                    }
                 }
+            } catch (NoHeadException e) {
+                logger.debug("'{}' does not have any commit yet. Starting with empty buckets.", gitProjectRootDir);
             }
         }
     }
@@ -262,12 +293,13 @@ class GitFlowMetaData {
     }
 
 
-    void saveBucket(final Bucket bucket, final File destination) throws IOException {
+    void saveBucket(final Bucket bucket, final File bucketDir) throws IOException {
         final Yaml yaml = new Yaml();
         final Map<String, Object> serializedBucket = bucket.serialize();
+        final File bucketFile = new File(bucketDir, GitFlowMetaData.BUCKET_FILENAME);
 
         try (final Writer writer = new OutputStreamWriter(
-                new FileOutputStream(destination), StandardCharsets.UTF_8)) {
+                new FileOutputStream(bucketFile), StandardCharsets.UTF_8)) {
             yaml.dump(serializedBucket, writer);
         }
     }

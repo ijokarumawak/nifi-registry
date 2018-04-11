@@ -39,7 +39,7 @@ import static org.apache.commons.lang3.StringUtils.isEmpty;
 public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
 
     private static final Logger logger = LoggerFactory.getLogger(GitFlowMetaData.class);
-    private static final String FLOW_STORAGE_DIR_PROP = "Flow Storage Directory";
+    static final String FLOW_STORAGE_DIR_PROP = "Flow Storage Directory";
     private static final String REMOTE_TO_PUSH = "Remote To Push";
     private static final String REMOTE_ACCESS_USER = "Remote Access User";
     private static final String REMOTE_ACCESS_PASSWORD = "Remote Access Password";
@@ -77,12 +77,11 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
 
         try {
             flowStorageDir = new File(flowStorageDirValue);
-            FileUtils.ensureDirectoryExistAndCanReadAndWrite(flowStorageDir);
             flowMetaData.loadGitRepository(flowStorageDir);
             logger.info("Configured GitFlowPersistenceProvider with Flow Storage Directory {}",
                     new Object[] {flowStorageDir.getAbsolutePath()});
         } catch (IOException|GitAPIException e) {
-            throw new ProviderCreationException(e);
+            throw new ProviderCreationException("Failed to load a git repository " + flowStorageDir, e);
         }
     }
 
@@ -120,7 +119,6 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
 
         final File bucketDir = new File(flowStorageDir, bucket.getBucketName());
         final File flowSnippetFile = new File(bucketDir, flowSnapshotFilename);
-        final File bucketFile = new File(bucketDir, GitFlowMetaData.BUCKET_FILENAME);
 
         final File currentBucketDir = isEmpty(currentBucketName) ? null : new File(flowStorageDir, currentBucketName);
         if (currentBucketDir != null && currentBucketDir.isDirectory()) {
@@ -153,7 +151,7 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
             }
 
             // Write a bucket file.
-            flowMetaData.saveBucket(bucket, bucketFile);
+            flowMetaData.saveBucket(bucket, bucketDir);
 
             // Create a Git Commit.
             flowMetaData.commit(context.getAuthor(), context.getComments(), bucket, flowPointer);
@@ -216,8 +214,7 @@ public class GitFlowPersistenceProvider implements FlowPersistenceProvider {
                 FileUtils.deleteFile(bucketDir, true);
             } else {
                 // Write a bucket file.
-                final File bucketFile = new File(bucketDir, GitFlowMetaData.BUCKET_FILENAME);
-                flowMetaData.saveBucket(bucket, bucketFile);
+                flowMetaData.saveBucket(bucket, bucketDir);
             }
 
             // Create a Git Commit.
