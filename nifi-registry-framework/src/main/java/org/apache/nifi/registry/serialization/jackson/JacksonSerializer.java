@@ -43,7 +43,7 @@ public abstract class JacksonSerializer<T> implements VersionedSerializer<T> {
     private static final String JSON_HEADER = "\"header\"";
     private static final String DATA_MODEL_VERSION = "dataModelVersion";
 
-    private final ObjectMapper objectMapper = new ObjectMapper().configure(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true);
+    private final ObjectMapper objectMapper = ObjectMapperProvider.getMapper();
 
     @Override
     public void serialize(int dataModelVersion, T t, OutputStream out) throws SerializationException {
@@ -60,21 +60,15 @@ public abstract class JacksonSerializer<T> implements VersionedSerializer<T> {
         container.setContent(t);
 
         try {
-            objectMapper.writer().writeValue(out, container);
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(out, container);
         } catch (IOException e) {
             throw new SerializationException("Unable to serialize object", e);
         }
     }
 
     @Override
-    public T deserialize(int dataModelVersion, InputStream input) throws SerializationException {
-        try {
-            input.reset();
-        } catch (IOException e) {
-            throw new SerializationException("Unable to reset the input stream.", e);
-        }
-
-        final TypeReference<SerializationContainer<T>> typeRef = getDeserializeTypeRef(dataModelVersion);
+    public T deserialize(InputStream input) throws SerializationException {
+        final TypeReference<SerializationContainer<T>> typeRef = getDeserializeTypeRef();
         try {
             final SerializationContainer<T> container = objectMapper.readValue(input, typeRef);
             return container.getContent();
@@ -83,7 +77,7 @@ public abstract class JacksonSerializer<T> implements VersionedSerializer<T> {
         }
     }
 
-    abstract TypeReference<SerializationContainer<T>> getDeserializeTypeRef(int dataModelVersion) throws SerializationException;
+    abstract TypeReference<SerializationContainer<T>> getDeserializeTypeRef() throws SerializationException;
 
     @Override
     public int readDataModelVersion(InputStream input) throws SerializationException {

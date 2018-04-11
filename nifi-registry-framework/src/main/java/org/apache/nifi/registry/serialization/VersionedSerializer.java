@@ -19,24 +19,47 @@ package org.apache.nifi.registry.serialization;
 import java.io.InputStream;
 import java.io.OutputStream;
 
-// TODO: Javadoc
 /**
  * Serializes and de-serializes objects.
+ * This interface is designed to provide backward compatibility to different versioned serialization formats.
+ * So that serialized data model and format can evolve overtime.
  */
 public interface VersionedSerializer<T> {
 
-    // TODO: Javadoc
+    /**
+     * Serialize the given object into the target output stream with the specified version format.
+     * Implementation classes are responsible to serialize the version to the head of the serialized content,
+     * so that it can be retrieved by {@link #readDataModelVersion(InputStream)} method efficiently
+     * without reading the entire byte array.
+     *
+     * @param dataModelVersion the data model version
+     * @param t the object to serialize
+     * @param out the target output stream
+     * @throws SerializationException thrown when serialization failed
+     */
     void serialize(int dataModelVersion, T t, OutputStream out) throws SerializationException;
 
-    // TODO: Javadoc
+    /**
+     * Read data model version from the given InputStream.
+     * <p>
+     * Even if an implementation serializer was able to read a version, it does not necessary mean
+     * the same serializers {@link #deserialize(InputStream)} method will be called.
+     * For example, when the header structure has not been changed, the newer version of serializer may be able to
+     * read older data model version. But deserialization should be done with the older serializer.
+     * </p>
+     * @param input the input stream to read version from
+     * @return the read data model version
+     * @throws SerializationException thrown when reading version failed
+     */
     int readDataModelVersion(InputStream input) throws SerializationException;
 
     /**
      * Deserializes the given InputStream back to an object of the given type.
      *
-     * @param dataModelVersion the deta model version
-     * @param input the InputStream to deserialize
+     * @param input the InputStream to deserialize,
+     *              the position of input is reset to the the beginning of the stream when this method is called
      * @return the deserialized object
+     * @throws SerializationException thrown when deserialization failed
      */
-    T deserialize(int dataModelVersion, InputStream input) throws SerializationException;
+    T deserialize(InputStream input) throws SerializationException;
 }

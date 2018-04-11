@@ -92,8 +92,8 @@ public class TestVersionedProcessGroupSerializer {
     }
 
     @Test
-    public void testDeserializeJsonVer1() throws IOException {
-        final String file = "/serialization/json/ver1.snapshot";
+    public void testDeserializeVer1() throws IOException {
+        final String file = "/serialization/ver1.snapshot";
         final VersionedProcessGroupSerializer serializer = new VersionedProcessGroupSerializer();
         final VersionedProcessGroup processGroup;
         try (final InputStream is = this.getClass().getResourceAsStream(file)) {
@@ -103,22 +103,8 @@ public class TestVersionedProcessGroupSerializer {
     }
 
     @Test
-    public void testDeserializeJsonVer2() throws IOException {
-        final String file = "/serialization/json/ver2.snapshot";
-        final VersionedProcessGroupSerializer serializer = new VersionedProcessGroupSerializer();
-        try (final InputStream is = this.getClass().getResourceAsStream(file)) {
-            try {
-                serializer.deserialize(is);
-                fail("Should fail");
-            } catch (SerializationException e) {
-                assertEquals("Data model version 2 is not supported.", e.getMessage());
-            }
-        }
-    }
-
-    @Test
-    public void testDeserializeJaxbVer1() throws IOException {
-        final String file = "/serialization/jaxb/ver1.snapshot";
+    public void testDeserializeVer2() throws IOException {
+        final String file = "/serialization/ver2.snapshot";
         final VersionedProcessGroupSerializer serializer = new VersionedProcessGroupSerializer();
         final VersionedProcessGroup processGroup;
         try (final InputStream is = this.getClass().getResourceAsStream(file)) {
@@ -128,15 +114,15 @@ public class TestVersionedProcessGroupSerializer {
     }
 
     @Test
-    public void testDeserializeJaxbVer2() throws IOException {
-        final String file = "/serialization/jaxb/ver2.snapshot";
+    public void testDeserializeVer3() throws IOException {
+        final String file = "/serialization/ver3.snapshot";
         final VersionedProcessGroupSerializer serializer = new VersionedProcessGroupSerializer();
         try (final InputStream is = this.getClass().getResourceAsStream(file)) {
             try {
                 serializer.deserialize(is);
                 fail("Should fail");
             } catch (SerializationException e) {
-                assertEquals("Data model version 2 is not supported.", e.getMessage());
+                assertEquals("Unable to find a process group serializer compatible with the input.", e.getMessage());
             }
         }
     }

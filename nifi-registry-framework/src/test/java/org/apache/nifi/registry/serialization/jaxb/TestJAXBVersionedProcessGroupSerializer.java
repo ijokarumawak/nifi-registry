@@ -51,11 +51,13 @@ public class TestJAXBVersionedProcessGroupSerializer {
         //System.out.println(snapshotStr);
 
         final ByteArrayInputStream in = new ByteArrayInputStream(out.toByteArray());
+        in.mark(1024);
         final int version = serializer.readDataModelVersion(in);
 
         Assert.assertEquals(1, version);
 
-        final VersionedProcessGroup deserializedProcessGroup1 = serializer.deserialize(version, in);
+        in.reset();
+        final VersionedProcessGroup deserializedProcessGroup1 = serializer.deserialize(in);
 
         Assert.assertEquals(processGroup1.getIdentifier(), deserializedProcessGroup1.getIdentifier());
         Assert.assertEquals(processGroup1.getName(), deserializedProcessGroup1.getName());

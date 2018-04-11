@@ -80,16 +80,14 @@ public class JAXBSerializer<T> implements VersionedSerializer<T> {
     }
 
     @Override
-    public T deserialize(final int dataModelVersion, final InputStream input) throws SerializationException {
+    public T deserialize(final InputStream input) throws SerializationException {
         if (input == null) {
             throw new IllegalArgumentException("InputStream cannot be null");
         }
 
-        if (dataModelVersion != 1) {
-            throw new SerializationException(String.format("Data model version %s is not supported.", dataModelVersion));
-        }
-
         try {
+            // Consume the header bytes.
+            readDataModelVersion(input);
             final Unmarshaller unmarshaller = jaxbContext.createUnmarshaller();
             return (T) unmarshaller.unmarshal(input);
         } catch (JAXBException e) {

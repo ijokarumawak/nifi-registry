@@ -14,27 +14,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.nifi.registry.web.mapper;
+package org.apache.nifi.registry.serialization.jackson;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.module.jaxb.JaxbAnnotationIntrospector;
-import org.apache.nifi.registry.serialization.jackson.ObjectMapperProvider;
-import org.glassfish.jersey.jackson.internal.jackson.jaxrs.json.JacksonJaxbJsonProvider;
-import org.springframework.stereotype.Component;
 
-import javax.ws.rs.Produces;
-import javax.ws.rs.core.MediaType;
-import javax.ws.rs.ext.Provider;
+/**
+ * Provides a singleton ObjectMapper.
+ */
+public abstract class ObjectMapperProvider {
 
-@Component
-@Provider
-@Produces(MediaType.APPLICATION_JSON)
-public class NiFiRegistryJsonProvider extends JacksonJaxbJsonProvider {
+    private static final ObjectMapper mapper = new ObjectMapper();
 
-    public NiFiRegistryJsonProvider() {
-        super();
-        setMapper(ObjectMapperProvider.getMapper());
+    static {
+        mapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
+        mapper.setDefaultPropertyInclusion(JsonInclude.Value.construct(JsonInclude.Include.NON_NULL, JsonInclude.Include.NON_NULL));
+        mapper.setAnnotationIntrospector(new JaxbAnnotationIntrospector(mapper.getTypeFactory()));
+        mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        mapper.configure(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true);
+    }
+
+    public static ObjectMapper getMapper() {
+        return mapper;
     }
 }

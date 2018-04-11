@@ -20,19 +20,16 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import org.apache.nifi.registry.flow.VersionedProcessGroup;
 import org.apache.nifi.registry.serialization.SerializationException;
 
+import java.io.OutputStream;
+
 /**
  * A Jackson serializer for VersionedFlowSnapshots.
  */
-public class JaxksonVersionedProcessGroupSerializer extends JacksonSerializer<VersionedProcessGroup> {
+public class JacksonVersionedProcessGroupSerializer extends JacksonSerializer<VersionedProcessGroup> {
 
 
     @Override
-    TypeReference<SerializationContainer<VersionedProcessGroup>> getDeserializeTypeRef(int dataModelVersion) throws SerializationException {
-
-        if (dataModelVersion != 1) {
-            throw new SerializationException(String.format("Data model version %s is not supported.", dataModelVersion));
-        }
-
+    TypeReference<SerializationContainer<VersionedProcessGroup>> getDeserializeTypeRef() throws SerializationException {
         return new TypeReference<SerializationContainer<VersionedProcessGroup>>() {};
     }
 }

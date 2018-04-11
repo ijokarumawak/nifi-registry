@@ -17,14 +17,14 @@
 
 package org.apache.nifi.registry.serialization.jackson;
 
-import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import io.swagger.annotations.ApiModelProperty;
 
 import javax.xml.bind.annotation.XmlRootElement;
+import javax.xml.bind.annotation.XmlType;
 import java.util.Map;
 
 @XmlRootElement
-@JsonPropertyOrder(value = {"header", "content"})
+@XmlType(propOrder = {"header", "content"})
 public class SerializationContainer<T> {
 
     private Map<String, String> header;
