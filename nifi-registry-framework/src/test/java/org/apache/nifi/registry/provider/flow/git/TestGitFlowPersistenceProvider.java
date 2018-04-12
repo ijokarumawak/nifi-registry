@@ -282,5 +282,6 @@ public class TestGitFlowPersistenceProvider {
             } catch (FlowPersistenceException e) {
                 assertEquals("Bucket ID bucket-id-A was not found.", e.getMessage());
             }
-        }, true);    }
+        }, true);
+    }
 }

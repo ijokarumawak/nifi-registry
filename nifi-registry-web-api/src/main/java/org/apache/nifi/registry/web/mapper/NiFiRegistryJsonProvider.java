@@ -16,10 +16,6 @@
  */
 package org.apache.nifi.registry.web.mapper;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.module.jaxb.JaxbAnnotationIntrospector;
 import org.apache.nifi.registry.serialization.jackson.ObjectMapperProvider;
 import org.glassfish.jersey.jackson.internal.jackson.jaxrs.json.JacksonJaxbJsonProvider;
 import org.springframework.stereotype.Component;
