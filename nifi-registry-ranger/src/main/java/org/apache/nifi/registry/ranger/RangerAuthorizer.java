@@ -63,7 +63,7 @@ public class RangerAuthorizer implements Authorizer, AuthorizationAuditor {
     static final String RANGER_NIFI_REG_RESOURCE_NAME = "nifi-registry-resource";
     static final String DEFAULT_SERVICE_TYPE = "nifi-registry";
     static final String DEFAULT_APP_ID = "nifi-registry";
-    static final String RESOURCES_RESOURCE = "/resources";
+    static final String RESOURCES_RESOURCE = "/policies";
     static final String HADOOP_SECURITY_AUTHENTICATION = "hadoop.security.authentication";
     static final String KERBEROS_AUTHENTICATION = "kerberos";
 

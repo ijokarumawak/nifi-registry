@@ -102,7 +102,7 @@ public class RangerBasePluginWithPolicies extends RangerBasePlugin {
         final Map<String, AccessPolicy> policiesByIdentifier = new HashMap<>();
         final Map<String, Map<RequestAction, AccessPolicy>> policiesByResource = new HashMap<>();
 
-        logger.info("Converting Ranger ServicePolicies model into NiFi Registry policy model for viewing purposes in NiFi Registry UI.");
+        logger.debug("Converting Ranger ServicePolicies model into NiFi Registry policy model for viewing purposes in NiFi Registry UI.");
 
         servicePolicies.getPolicies().stream().forEach(policy -> {
             // only consider policies that are enabled
