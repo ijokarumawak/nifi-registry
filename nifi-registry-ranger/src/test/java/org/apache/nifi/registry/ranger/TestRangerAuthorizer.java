@@ -26,9 +26,14 @@ import org.apache.nifi.registry.security.authorization.AuthorizationResult;
 import org.apache.nifi.registry.security.authorization.Authorizer;
 import org.apache.nifi.registry.security.authorization.AuthorizerConfigurationContext;
 import org.apache.nifi.registry.security.authorization.AuthorizerInitializationContext;
+import org.apache.nifi.registry.security.authorization.ConfigurableUserGroupProvider;
 import org.apache.nifi.registry.security.authorization.RequestAction;
 import org.apache.nifi.registry.security.authorization.Resource;
 import org.apache.nifi.registry.security.authorization.UserContextKeys;
+import org.apache.nifi.registry.security.authorization.UserGroupProvider;
+import org.apache.nifi.registry.security.authorization.UserGroupProviderLookup;
+import org.apache.nifi.registry.security.authorization.exception.AuthorizationAccessException;
+import org.apache.nifi.registry.security.authorization.exception.UninheritableAuthorizationsException;
 import org.apache.nifi.registry.security.exception.SecurityProviderCreationException;
 import org.apache.nifi.registry.util.StandardPropertyValue;
 import org.apache.ranger.plugin.policyengine.RangerAccessRequest;
@@ -37,11 +42,9 @@ import org.apache.ranger.plugin.policyengine.RangerAccessResourceImpl;
 import org.apache.ranger.plugin.policyengine.RangerAccessResult;
 import org.apache.ranger.plugin.policyengine.RangerAccessResultProcessor;
 import org.junit.Assert;
-import org.junit.Before;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.mockito.ArgumentMatcher;
-import org.mockito.Mockito;
 
 import javax.security.auth.login.LoginException;
 import java.io.File;
@@ -54,25 +57,51 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Matchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 public class TestRangerAuthorizer {
 
+    private static final String TENANT_FINGERPRINT =
+            "<tenants>"
+                    + "<user identifier=\"user-id-1\" identity=\"user-1\"></user>"
+                    + "<group identifier=\"group-id-1\" name=\"group-1\">"
+                    + "<groupUser identifier=\"user-id-1\"></groupUser>"
+                    + "</group>"
+                    + "</tenants>";
+
+    private static final String EMPTY_FINGERPRINT = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>"
+            + "<managedRangerAuthorizations>"
+            + "<userGroupProvider/>"
+            + "</managedRangerAuthorizations>";
+
+    private static final String NON_EMPTY_FINGERPRINT = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>"
+            + "<managedRangerAuthorizations>"
+            + "<userGroupProvider>"
+            + "&lt;tenants&gt;"
+            + "&lt;user identifier=\"user-id-1\" identity=\"user-1\"&gt;&lt;/user&gt;"
+            + "&lt;group identifier=\"group-id-1\" name=\"group-1\"&gt;"
+            + "&lt;groupUser identifier=\"user-id-1\"&gt;&lt;/groupUser&gt;"
+            + "&lt;/group&gt;"
+            + "&lt;/tenants&gt;"
+            + "</userGroupProvider>"
+            + "</managedRangerAuthorizations>";
+
     private MockRangerAuthorizer authorizer;
     private RangerBasePluginWithPolicies rangerBasePlugin;
-    private AuthorizerConfigurationContext configurationContext;
-    private NiFiRegistryProperties registryProperties;
 
-    private final String serviceType = "nifiService";
-    private final String appId = "nifiAppId";
+    private final String serviceType = "nifiRegistryService";
+    private final String appId = "nifiRegistryAppId";
 
     private RangerAccessResult allowedResult;
     private RangerAccessResult notAllowedResult;
 
-    @Before
-    public void setup() {
+    private void setup(final NiFiRegistryProperties registryProperties,
+                      final UserGroupProvider userGroupProvider,
+                      final AuthorizerConfigurationContext configurationContext) {
         // have to initialize this system property before anything else
         File krb5conf = new File("src/test/resources/krb5.conf");
         assertTrue(krb5conf.exists());
@@ -83,22 +112,33 @@ public class TestRangerAuthorizer {
         securityConf.set(RangerAuthorizer.HADOOP_SECURITY_AUTHENTICATION, "simple");
         UserGroupInformation.setConfiguration(securityConf);
 
-        configurationContext = createMockConfigContext();
-        rangerBasePlugin = Mockito.mock(RangerBasePluginWithPolicies.class);
+        rangerBasePlugin = mock(RangerBasePluginWithPolicies.class);
         authorizer = new MockRangerAuthorizer(rangerBasePlugin);
+
+        final UserGroupProviderLookup userGroupProviderLookup = mock(UserGroupProviderLookup.class);
+        when(userGroupProviderLookup.getUserGroupProvider(eq("user-group-provider"))).thenReturn(userGroupProvider);
+
+        final AuthorizerInitializationContext initializationContext = mock(AuthorizerInitializationContext.class);
+        when(initializationContext.getUserGroupProviderLookup()).thenReturn(userGroupProviderLookup);
+
+        authorizer.setRegistryProperties(registryProperties);
+        authorizer.initialize(initializationContext);
         authorizer.onConfigured(configurationContext);
 
         assertFalse(UserGroupInformation.isSecurityEnabled());
 
-        allowedResult = Mockito.mock(RangerAccessResult.class);
+        allowedResult = mock(RangerAccessResult.class);
         when(allowedResult.getIsAllowed()).thenReturn(true);
 
-        notAllowedResult = Mockito.mock(RangerAccessResult.class);
+        notAllowedResult = mock(RangerAccessResult.class);
         when(notAllowedResult.getIsAllowed()).thenReturn(false);
     }
 
     private AuthorizerConfigurationContext createMockConfigContext() {
-        AuthorizerConfigurationContext configurationContext = Mockito.mock(AuthorizerConfigurationContext.class);
+        AuthorizerConfigurationContext configurationContext = mock(AuthorizerConfigurationContext.class);
+
+        when(configurationContext.getProperty(eq(RangerAuthorizer.USER_GROUP_PROVIDER)))
+                .thenReturn(new StandardPropertyValue("user-group-provider"));
 
         when(configurationContext.getProperty(eq(RangerAuthorizer.RANGER_SECURITY_PATH_PROP)))
                 .thenReturn(new StandardPropertyValue("src/test/resources/ranger/ranger-nifi-registry-security.xml"));
@@ -117,6 +157,8 @@ public class TestRangerAuthorizer {
 
     @Test
     public void testOnConfigured() {
+        setup(mock(NiFiRegistryProperties.class), mock(UserGroupProvider.class), createMockConfigContext());
+
         verify(rangerBasePlugin, times(1)).init();
 
         assertEquals(appId, authorizer.mockRangerBasePlugin.getAppId());
@@ -125,18 +167,18 @@ public class TestRangerAuthorizer {
 
     @Test
     public void testKerberosEnabledWithoutKeytab() {
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+
         when(configurationContext.getProperty(eq(RangerAuthorizer.RANGER_KERBEROS_ENABLED_PROP)))
                 .thenReturn(new StandardPropertyValue("true"));
 
-        registryProperties = Mockito.mock(NiFiRegistryProperties.class);
+        NiFiRegistryProperties registryProperties = mock(NiFiRegistryProperties.class);
         // TODO: Kerberos
 //        when(registryProperties.getKerberosServicePrincipal()).thenReturn("");
 
-        authorizer = new MockRangerAuthorizer(rangerBasePlugin);
-        authorizer.setRegistryProperties(registryProperties);
 
         try {
-            authorizer.onConfigured(configurationContext);
+            setup(registryProperties, mock(UserGroupProvider.class), configurationContext);
             Assert.fail("Should have thrown exception");
         } catch (SecurityProviderCreationException e) {
             // want to make sure this exception is from our authorizer code
@@ -146,18 +188,17 @@ public class TestRangerAuthorizer {
 
     @Test
     public void testKerberosEnabledWithoutPrincipal() {
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+
         when(configurationContext.getProperty(eq(RangerAuthorizer.RANGER_KERBEROS_ENABLED_PROP)))
                 .thenReturn(new StandardPropertyValue("true"));
 
-        registryProperties = Mockito.mock(NiFiRegistryProperties.class);
+        NiFiRegistryProperties registryProperties = mock(NiFiRegistryProperties.class);
         // TODO: Kerberos
 //        when(registryProperties.getKerberosServiceKeytabLocation()).thenReturn("");
 
-        authorizer = new MockRangerAuthorizer(rangerBasePlugin);
-        authorizer.setRegistryProperties(registryProperties);
-
         try {
-            authorizer.onConfigured(configurationContext);
+            setup(registryProperties, mock(UserGroupProvider.class), configurationContext);
             Assert.fail("Should have thrown exception");
         } catch (SecurityProviderCreationException e) {
             // want to make sure this exception is from our authorizer code
@@ -167,19 +208,18 @@ public class TestRangerAuthorizer {
 
     @Test
     public void testKerberosEnabledWithoutKeytabOrPrincipal() {
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+
         when(configurationContext.getProperty(eq(RangerAuthorizer.RANGER_KERBEROS_ENABLED_PROP)))
                 .thenReturn(new StandardPropertyValue("true"));
 
-        registryProperties = Mockito.mock(NiFiRegistryProperties.class);
+        NiFiRegistryProperties registryProperties = mock(NiFiRegistryProperties.class);
         // TODO: Kerberos
 //        when(registryProperties.getKerberosServiceKeytabLocation()).thenReturn("");
 //        when(registryProperties.getKerberosServicePrincipal()).thenReturn("");
 
-        authorizer = new MockRangerAuthorizer(rangerBasePlugin);
-        authorizer.setRegistryProperties(registryProperties);
-
         try {
-            authorizer.onConfigured(configurationContext);
+            setup(registryProperties, mock(UserGroupProvider.class), configurationContext);
             Assert.fail("Should have thrown exception");
         } catch (SecurityProviderCreationException e) {
             // want to make sure this exception is from our authorizer code
@@ -202,19 +242,18 @@ public class TestRangerAuthorizer {
 
     @Test
     public void testKerberosEnabled() {
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+
         when(configurationContext.getProperty(eq(RangerAuthorizer.RANGER_KERBEROS_ENABLED_PROP)))
                 .thenReturn(new StandardPropertyValue("true"));
 
-        registryProperties = Mockito.mock(NiFiRegistryProperties.class);
+        NiFiRegistryProperties registryProperties = mock(NiFiRegistryProperties.class);
         // TODO: Kerberos
 //        when(registryProperties.getKerberosServiceKeytabLocation()).thenReturn("test");
 //        when(registryProperties.getKerberosServicePrincipal()).thenReturn("test");
 
-        authorizer = new MockRangerAuthorizer(rangerBasePlugin);
-        authorizer.setRegistryProperties(registryProperties);
-
         try {
-            authorizer.onConfigured(configurationContext);
+            setup(registryProperties, mock(UserGroupProvider.class), configurationContext);
             Assert.fail("Should have thrown exception");
         } catch (SecurityProviderCreationException e) {
             // getting a LoginException here means we attempted to login which is what we want
@@ -233,6 +272,9 @@ public class TestRangerAuthorizer {
 
     @Test
     public void testApprovedWithDirectAccess() {
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), mock(UserGroupProvider.class), configurationContext);
+
         final String systemResource = "/system";
         final RequestAction action = RequestAction.WRITE;
         final String user = "admin";
@@ -274,6 +316,9 @@ public class TestRangerAuthorizer {
 
     @Test
     public void testApprovedWithNonDirectAccess() {
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), mock(UserGroupProvider.class), configurationContext);
+
         final String systemResource = "/system";
         final RequestAction action = RequestAction.WRITE;
         final String user = "admin";
@@ -309,6 +354,9 @@ public class TestRangerAuthorizer {
 
     @Test
     public void testResourceNotFound() {
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), mock(UserGroupProvider.class), configurationContext);
+
         final String systemResource = "/system";
         final RequestAction action = RequestAction.WRITE;
         final String user = "admin";
@@ -348,6 +396,9 @@ public class TestRangerAuthorizer {
 
     @Test
     public void testDenied() {
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), mock(UserGroupProvider.class), configurationContext);
+
         final String systemResource = "/system";
         final RequestAction action = RequestAction.WRITE;
         final String user = "admin";
@@ -395,15 +446,13 @@ public class TestRangerAuthorizer {
     }
 
     private void runRangerAdminTest(final String resourceIdentifier, final AuthorizationResult.Result expectedResult) {
-        configurationContext = createMockConfigContext();
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
 
         final String rangerAdminIdentity = "ranger-admin";
         when(configurationContext.getProperty(eq(RangerAuthorizer.RANGER_ADMIN_IDENTITY_PROP)))
                 .thenReturn(new StandardPropertyValue(rangerAdminIdentity));
 
-        rangerBasePlugin = Mockito.mock(RangerBasePluginWithPolicies.class);
-        authorizer = new MockRangerAuthorizer(rangerBasePlugin);
-        authorizer.onConfigured(configurationContext);
+        setup(mock(NiFiRegistryProperties.class), mock(UserGroupProvider.class), configurationContext);
 
         final RequestAction action = RequestAction.WRITE;
 
@@ -442,8 +491,8 @@ public class TestRangerAuthorizer {
     @Test
     @Ignore
     public void testIntegration() {
-        final AuthorizerInitializationContext initializationContext = Mockito.mock(AuthorizerInitializationContext.class);
-        final AuthorizerConfigurationContext configurationContext = Mockito.mock(AuthorizerConfigurationContext.class);
+        final AuthorizerInitializationContext initializationContext = mock(AuthorizerInitializationContext.class);
+        final AuthorizerConfigurationContext configurationContext = mock(AuthorizerConfigurationContext.class);
 
         when(configurationContext.getProperty(eq(RangerAuthorizer.RANGER_SECURITY_PATH_PROP)))
                 .thenReturn(new StandardPropertyValue("src/test/resources/ranger/ranger-nifi-registry-security.xml"));
@@ -560,6 +609,114 @@ public class TestRangerAuthorizer {
                     && other.getUser().equals(request.getUser())
                     && clientIpsMatch;
         }
+    }
+
+    @Test
+    public void testNonConfigurableFingerPrint() {
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), mock(UserGroupProvider.class), configurationContext);
+
+        Assert.assertEquals(EMPTY_FINGERPRINT, authorizer.getFingerprint());
+    }
+
+    @Test
+    public void testConfigurableEmptyFingerPrint() {
+        final ConfigurableUserGroupProvider userGroupProvider = mock(ConfigurableUserGroupProvider.class);
+        when(userGroupProvider.getFingerprint()).thenReturn("");
+
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), userGroupProvider, configurationContext);
+
+        Assert.assertEquals(EMPTY_FINGERPRINT, authorizer.getFingerprint());
+    }
+
+    @Test
+    public void testConfigurableFingerPrint() {
+        final ConfigurableUserGroupProvider userGroupProvider = mock(ConfigurableUserGroupProvider.class);
+        when(userGroupProvider.getFingerprint()).thenReturn(TENANT_FINGERPRINT);
+
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), userGroupProvider, configurationContext);
+
+        Assert.assertEquals(NON_EMPTY_FINGERPRINT, authorizer.getFingerprint());
+    }
+
+    @Test
+    public void testInheritEmptyFingerprint() {
+        final ConfigurableUserGroupProvider userGroupProvider = mock(ConfigurableUserGroupProvider.class);
+
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), userGroupProvider, configurationContext);
+
+        authorizer.inheritFingerprint(EMPTY_FINGERPRINT);
+
+        verify(userGroupProvider, times(0)).inheritFingerprint(anyString());
+    }
+
+    @Test(expected = AuthorizationAccessException.class)
+    public void testInheritInvalidFingerprint() {
+        final ConfigurableUserGroupProvider userGroupProvider = mock(ConfigurableUserGroupProvider.class);
+
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), userGroupProvider, configurationContext);
+
+        authorizer.inheritFingerprint("not a valid fingerprint");
+    }
+
+    @Test
+    public void testInheritNonEmptyFingerprint() {
+        final ConfigurableUserGroupProvider userGroupProvider = mock(ConfigurableUserGroupProvider.class);
+
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), userGroupProvider, configurationContext);
+
+        authorizer.inheritFingerprint(NON_EMPTY_FINGERPRINT);
+
+        verify(userGroupProvider, times(1)).inheritFingerprint(TENANT_FINGERPRINT);
+    }
+
+    @Test
+    public void testCheckInheritEmptyFingerprint() {
+        final ConfigurableUserGroupProvider userGroupProvider = mock(ConfigurableUserGroupProvider.class);
+
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), userGroupProvider, configurationContext);
+
+        authorizer.checkInheritability(EMPTY_FINGERPRINT);
+
+        verify(userGroupProvider, times(0)).inheritFingerprint(anyString());
+    }
+
+    @Test(expected = AuthorizationAccessException.class)
+    public void testCheckInheritInvalidFingerprint() {
+        final ConfigurableUserGroupProvider userGroupProvider = mock(ConfigurableUserGroupProvider.class);
+
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), userGroupProvider, configurationContext);
+
+        authorizer.checkInheritability("not a valid fingerprint");
+    }
+
+    @Test
+    public void testCheckInheritNonEmptyFingerprint() {
+        final ConfigurableUserGroupProvider userGroupProvider = mock(ConfigurableUserGroupProvider.class);
+
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), userGroupProvider, configurationContext);
+
+        authorizer.checkInheritability(NON_EMPTY_FINGERPRINT);
+
+        verify(userGroupProvider, times(1)).checkInheritability(TENANT_FINGERPRINT);
+    }
+
+    @Test(expected = UninheritableAuthorizationsException.class)
+    public void testCheckInheritNonConfigurableUserGroupProvider() {
+        final UserGroupProvider userGroupProvider = mock(UserGroupProvider.class);
+
+        final AuthorizerConfigurationContext configurationContext = createMockConfigContext();
+        setup(mock(NiFiRegistryProperties.class), userGroupProvider, configurationContext);
+
+        authorizer.checkInheritability(NON_EMPTY_FINGERPRINT);
     }
 
 }

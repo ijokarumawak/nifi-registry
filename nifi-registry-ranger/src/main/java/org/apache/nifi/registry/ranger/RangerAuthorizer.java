@@ -20,14 +20,23 @@ import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.nifi.registry.properties.NiFiRegistryProperties;
+import org.apache.nifi.registry.security.authorization.AccessPolicy;
+import org.apache.nifi.registry.security.authorization.AccessPolicyProvider;
+import org.apache.nifi.registry.security.authorization.AccessPolicyProviderInitializationContext;
 import org.apache.nifi.registry.security.authorization.AuthorizationAuditor;
 import org.apache.nifi.registry.security.authorization.AuthorizationRequest;
 import org.apache.nifi.registry.security.authorization.AuthorizationResult;
-import org.apache.nifi.registry.security.authorization.Authorizer;
 import org.apache.nifi.registry.security.authorization.AuthorizerConfigurationContext;
 import org.apache.nifi.registry.security.authorization.AuthorizerInitializationContext;
+import org.apache.nifi.registry.security.authorization.ConfigurableUserGroupProvider;
+import org.apache.nifi.registry.security.authorization.ManagedAuthorizer;
+import org.apache.nifi.registry.security.authorization.RequestAction;
 import org.apache.nifi.registry.security.authorization.UserContextKeys;
+import org.apache.nifi.registry.security.authorization.UserGroupProvider;
+import org.apache.nifi.registry.security.authorization.UserGroupProviderLookup;
 import org.apache.nifi.registry.security.authorization.annotation.AuthorizerContext;
+import org.apache.nifi.registry.security.authorization.exception.AuthorizationAccessException;
+import org.apache.nifi.registry.security.authorization.exception.UninheritableAuthorizationsException;
 import org.apache.nifi.registry.security.exception.SecurityProviderCreationException;
 import org.apache.nifi.registry.util.PropertyValue;
 import org.apache.ranger.audit.model.AuthzAuditEvent;
@@ -38,9 +47,26 @@ import org.apache.ranger.plugin.policyengine.RangerAccessResourceImpl;
 import org.apache.ranger.plugin.policyengine.RangerAccessResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.SAXException;
 
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import javax.xml.transform.Transformer;
+import javax.xml.transform.TransformerException;
+import javax.xml.transform.TransformerFactory;
+import javax.xml.transform.dom.DOMSource;
+import javax.xml.transform.stream.StreamResult;
+import java.io.ByteArrayInputStream;
 import java.io.File;
+import java.io.IOException;
+import java.io.StringWriter;
 import java.net.MalformedURLException;
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.Map;
 import java.util.Set;
@@ -49,9 +75,15 @@ import java.util.WeakHashMap;
 /**
  * Authorizer implementation that uses Apache Ranger to make authorization decisions.
  */
-public class RangerAuthorizer implements Authorizer, AuthorizationAuditor {
+public class RangerAuthorizer implements ManagedAuthorizer, AuthorizationAuditor {
 
     private static final Logger logger = LoggerFactory.getLogger(RangerAuthorizer.class);
+
+    private static final DocumentBuilderFactory DOCUMENT_BUILDER_FACTORY = DocumentBuilderFactory.newInstance();
+
+    private static final String USER_GROUP_PROVIDER_ELEMENT = "userGroupProvider";
+
+    static final String USER_GROUP_PROVIDER = "User Group Provider";
 
     static final String RANGER_AUDIT_PATH_PROP = "Ranger Audit Config Path";
     static final String RANGER_SECURITY_PATH_PROP = "Ranger Security Config Path";
@@ -61,8 +93,8 @@ public class RangerAuthorizer implements Authorizer, AuthorizationAuditor {
     static final String RANGER_APP_ID_PROP = "Ranger Application Id";
 
     static final String RANGER_NIFI_REG_RESOURCE_NAME = "nifi-registry-resource";
-    static final String DEFAULT_SERVICE_TYPE = "nifi-registry";
-    static final String DEFAULT_APP_ID = "nifi-registry";
+    private static final String DEFAULT_SERVICE_TYPE = "nifi-registry";
+    private static final String DEFAULT_APP_ID = "nifi-registry";
     static final String RESOURCES_RESOURCE = "/policies";
     static final String HADOOP_SECURITY_AUTHENTICATION = "hadoop.security.authentication";
     static final String KERBEROS_AUTHENTICATION = "kerberos";
@@ -72,16 +104,30 @@ public class RangerAuthorizer implements Authorizer, AuthorizationAuditor {
     private volatile RangerBasePluginWithPolicies rangerPlugin = null;
     private volatile RangerDefaultAuditHandler defaultAuditHandler = null;
     private volatile String rangerAdminIdentity = null;
-    private volatile boolean rangerKerberosEnabled = false;
     private volatile NiFiRegistryProperties registryProperties;
+
+    private UserGroupProviderLookup userGroupProviderLookup;
+    private UserGroupProvider userGroupProvider;
+
 
     @Override
     public void initialize(AuthorizerInitializationContext initializationContext) throws SecurityProviderCreationException {
-
+        userGroupProviderLookup = initializationContext.getUserGroupProviderLookup();
     }
 
     @Override
     public void onConfigured(AuthorizerConfigurationContext configurationContext) throws SecurityProviderCreationException {
+        final String userGroupProviderKey = configurationContext.getProperty(USER_GROUP_PROVIDER).getValue();
+        if (StringUtils.isEmpty(userGroupProviderKey)) {
+            throw new SecurityProviderCreationException(USER_GROUP_PROVIDER + " must be specified.");
+        }
+        userGroupProvider = userGroupProviderLookup.getUserGroupProvider(userGroupProviderKey);
+
+        // ensure the desired access policy provider has a user group provider
+        if (userGroupProvider == null) {
+            throw new SecurityProviderCreationException(String.format("Unable to locate configured User Group Provider: %s", userGroupProviderKey));
+        }
+
         try {
             if (rangerPlugin == null) {
                 logger.info("initializing base plugin");
@@ -92,8 +138,7 @@ public class RangerAuthorizer implements Authorizer, AuthorizationAuditor {
                 final PropertyValue auditConfigValue = configurationContext.getProperty(RANGER_AUDIT_PATH_PROP);
                 addRequiredResource(RANGER_AUDIT_PATH_PROP, auditConfigValue);
 
-                final String rangerKerberosEnabledValue = getConfigValue(configurationContext, RANGER_KERBEROS_ENABLED_PROP, Boolean.FALSE.toString());
-                rangerKerberosEnabled = rangerKerberosEnabledValue.equals(Boolean.TRUE.toString()) ? true : false;
+                boolean rangerKerberosEnabled = Boolean.valueOf(getConfigValue(configurationContext, RANGER_KERBEROS_ENABLED_PROP, Boolean.FALSE.toString()));
 
                 if (rangerKerberosEnabled) {
                     // configure UGI for when RangerAdminRESTClient calls UserGroupInformation.isSecurityEnabled()
@@ -134,7 +179,7 @@ public class RangerAuthorizer implements Authorizer, AuthorizationAuditor {
     }
 
     protected RangerBasePluginWithPolicies createRangerBasePlugin(final String serviceType, final String appId) {
-        return new RangerBasePluginWithPolicies(serviceType, appId);
+        return new RangerBasePluginWithPolicies(serviceType, appId, userGroupProvider);
     }
 
     @Override
@@ -274,4 +319,116 @@ public class RangerAuthorizer implements Authorizer, AuthorizationAuditor {
         return retValue;
     }
 
+    @Override
+    public String getFingerprint() throws AuthorizationAccessException {
+        final StringWriter out = new StringWriter();
+        try {
+            // create the document
+            final DocumentBuilder documentBuilder = DOCUMENT_BUILDER_FACTORY.newDocumentBuilder();
+            final Document document = documentBuilder.newDocument();
+
+            // create the root element
+            final Element managedRangerAuthorizationsElement = document.createElement("managedRangerAuthorizations");
+            document.appendChild(managedRangerAuthorizationsElement);
+
+            // create the user group provider element
+            final Element userGroupProviderElement = document.createElement(USER_GROUP_PROVIDER_ELEMENT);
+            managedRangerAuthorizationsElement.appendChild(userGroupProviderElement);
+
+            // append fingerprint if the provider is configurable
+            if (userGroupProvider instanceof ConfigurableUserGroupProvider) {
+                userGroupProviderElement.appendChild(document.createTextNode(((ConfigurableUserGroupProvider) userGroupProvider).getFingerprint()));
+            }
+
+            final Transformer transformer = TransformerFactory.newInstance().newTransformer();
+            transformer.transform(new DOMSource(document), new StreamResult(out));
+        } catch (ParserConfigurationException | TransformerException e) {
+            throw new AuthorizationAccessException("Unable to generate fingerprint", e);
+        }
+
+        return out.toString();
+    }
+
+    private String parseFingerprint(final String fingerprint) throws AuthorizationAccessException {
+        final byte[] fingerprintBytes = fingerprint.getBytes(StandardCharsets.UTF_8);
+
+        try (final ByteArrayInputStream in = new ByteArrayInputStream(fingerprintBytes)) {
+            final DocumentBuilder docBuilder = DOCUMENT_BUILDER_FACTORY.newDocumentBuilder();
+            final Document document = docBuilder.parse(in);
+            final Element rootElement = document.getDocumentElement();
+
+            final NodeList userGroupProviderList = rootElement.getElementsByTagName(USER_GROUP_PROVIDER_ELEMENT);
+            if (userGroupProviderList.getLength() != 1) {
+                throw new AuthorizationAccessException(String.format("Only one %s element is allowed: %s", USER_GROUP_PROVIDER_ELEMENT, fingerprint));
+            }
+
+            final Node userGroupProvider = userGroupProviderList.item(0);
+            return userGroupProvider.getTextContent();
+        } catch (SAXException | ParserConfigurationException | IOException e) {
+            throw new AuthorizationAccessException("Unable to parse fingerprint", e);
+        }
+    }
+
+    @Override
+    public void inheritFingerprint(String fingerprint) throws AuthorizationAccessException {
+        if (StringUtils.isBlank(fingerprint)) {
+            return;
+        }
+
+        final String userGroupFingerprint = parseFingerprint(fingerprint);
+
+        if (StringUtils.isNotBlank(userGroupFingerprint) && userGroupProvider instanceof ConfigurableUserGroupProvider) {
+            ((ConfigurableUserGroupProvider) userGroupProvider).inheritFingerprint(userGroupFingerprint);
+        }
+    }
+
+    @Override
+    public void checkInheritability(String proposedFingerprint) throws AuthorizationAccessException, UninheritableAuthorizationsException {
+        final String userGroupFingerprint = parseFingerprint(proposedFingerprint);
+
+        if (StringUtils.isNotBlank(userGroupFingerprint)) {
+            if (userGroupProvider instanceof ConfigurableUserGroupProvider) {
+                ((ConfigurableUserGroupProvider) userGroupProvider).checkInheritability(userGroupFingerprint);
+            } else {
+                throw new UninheritableAuthorizationsException("User/Group fingerprint is not blank and the configured UserGroupProvider does not support fingerprinting.");
+            }
+        }
+    }
+
+    @Override
+    public AccessPolicyProvider getAccessPolicyProvider() {
+        return new AccessPolicyProvider() {
+            @Override
+            public Set<AccessPolicy> getAccessPolicies() throws AuthorizationAccessException {
+                return rangerPlugin.getAccessPolicies();
+            }
+
+            @Override
+            public AccessPolicy getAccessPolicy(String identifier) throws AuthorizationAccessException {
+                return rangerPlugin.getAccessPolicy(identifier);
+            }
+
+            @Override
+            public AccessPolicy getAccessPolicy(String resourceIdentifier, RequestAction action) throws AuthorizationAccessException {
+                return rangerPlugin.getAccessPolicy(resourceIdentifier, action);
+            }
+
+            @Override
+            public UserGroupProvider getUserGroupProvider() {
+                return userGroupProvider;
+            }
+
+            @Override
+            public void initialize(AccessPolicyProviderInitializationContext initializationContext) throws SecurityProviderCreationException {
+            }
+
+            @Override
+            public void onConfigured(AuthorizerConfigurationContext configurationContext) throws SecurityProviderCreationException {
+            }
+
+            @Override
+            public void preDestruction() throws SecurityProviderCreationException {
+            }
+        };
+    }
 }
