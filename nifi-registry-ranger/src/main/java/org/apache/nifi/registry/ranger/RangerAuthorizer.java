@@ -97,7 +97,7 @@ public class RangerAuthorizer implements ManagedAuthorizer, AuthorizationAuditor
     private static final String DEFAULT_APP_ID = "nifi-registry";
     static final String RESOURCES_RESOURCE = "/policies";
     static final String HADOOP_SECURITY_AUTHENTICATION = "hadoop.security.authentication";
-    static final String KERBEROS_AUTHENTICATION = "kerberos";
+    private static final String KERBEROS_AUTHENTICATION = "kerberos";
 
     private final Map<AuthorizationRequest, RangerAccessResult> resultLookup = new WeakHashMap<>();
 
@@ -148,11 +148,8 @@ public class RangerAuthorizer implements ManagedAuthorizer, AuthorizationAuditor
 
                     // login with the nifi registry principal and keytab, RangerAdminRESTClient will use Ranger's MiscUtil which
                     // will grab UserGroupInformation.getLoginUser() and call ugi.checkTGTAndReloginFromKeytab();
-                    // TODO: Should we add service.principal?
-//                    final String registryPrincipal = registryProperties.getKerberosServicePrincipal();
-//                    final String registryKeytab = registryProperties.getKerberosServiceKeytabLocation();
-                    final String registryPrincipal = "";
-                    final String registryKeytab = "";
+                    final String registryPrincipal = registryProperties.getKerberosServicePrincipal();
+                    final String registryKeytab = registryProperties.getKerberosServiceKeytabLocation();
 
                     if (StringUtils.isBlank(registryPrincipal) || StringUtils.isBlank(registryKeytab)) {
                         throw new SecurityProviderCreationException("Principal and Keytab must be provided when Kerberos is enabled");

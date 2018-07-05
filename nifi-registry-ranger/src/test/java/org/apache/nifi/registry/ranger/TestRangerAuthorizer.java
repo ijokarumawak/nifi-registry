@@ -173,8 +173,7 @@ public class TestRangerAuthorizer {
                 .thenReturn(new StandardPropertyValue("true"));
 
         NiFiRegistryProperties registryProperties = mock(NiFiRegistryProperties.class);
-        // TODO: Kerberos
-//        when(registryProperties.getKerberosServicePrincipal()).thenReturn("");
+        when(registryProperties.getKerberosServicePrincipal()).thenReturn("");
 
 
         try {
@@ -194,8 +193,7 @@ public class TestRangerAuthorizer {
                 .thenReturn(new StandardPropertyValue("true"));
 
         NiFiRegistryProperties registryProperties = mock(NiFiRegistryProperties.class);
-        // TODO: Kerberos
-//        when(registryProperties.getKerberosServiceKeytabLocation()).thenReturn("");
+        when(registryProperties.getKerberosServiceKeytabLocation()).thenReturn("");
 
         try {
             setup(registryProperties, mock(UserGroupProvider.class), configurationContext);
@@ -214,9 +212,8 @@ public class TestRangerAuthorizer {
                 .thenReturn(new StandardPropertyValue("true"));
 
         NiFiRegistryProperties registryProperties = mock(NiFiRegistryProperties.class);
-        // TODO: Kerberos
-//        when(registryProperties.getKerberosServiceKeytabLocation()).thenReturn("");
-//        when(registryProperties.getKerberosServicePrincipal()).thenReturn("");
+        when(registryProperties.getKerberosServiceKeytabLocation()).thenReturn("");
+        when(registryProperties.getKerberosServicePrincipal()).thenReturn("");
 
         try {
             setup(registryProperties, mock(UserGroupProvider.class), configurationContext);
@@ -248,9 +245,8 @@ public class TestRangerAuthorizer {
                 .thenReturn(new StandardPropertyValue("true"));
 
         NiFiRegistryProperties registryProperties = mock(NiFiRegistryProperties.class);
-        // TODO: Kerberos
-//        when(registryProperties.getKerberosServiceKeytabLocation()).thenReturn("test");
-//        when(registryProperties.getKerberosServicePrincipal()).thenReturn("test");
+        when(registryProperties.getKerberosServiceKeytabLocation()).thenReturn("test");
+        when(registryProperties.getKerberosServicePrincipal()).thenReturn("test");
 
         try {
             setup(registryProperties, mock(UserGroupProvider.class), configurationContext);
