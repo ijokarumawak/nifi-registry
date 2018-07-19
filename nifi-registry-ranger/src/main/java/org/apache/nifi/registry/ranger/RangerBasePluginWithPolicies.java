@@ -56,7 +56,7 @@ public class RangerBasePluginWithPolicies extends RangerBasePlugin {
 
     public RangerBasePluginWithPolicies(final String serviceType, final String appId, final UserGroupProvider userGroupProvider) {
         super(serviceType, appId);
-        this.userGroupProvider = userGroupProvider; // will be null if used outside of the ManagedRangerAuthorizer
+        this.userGroupProvider = userGroupProvider; // will be null if used outside of the managed RangerAuthorizer
     }
 
     @Override
